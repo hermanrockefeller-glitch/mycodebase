@@ -112,6 +112,7 @@ python -m options_pricer.dashboard.blotter_app     # Launch blotter dashboard at
 - **Dropdowns in tables:** Dash DataTable dropdown columns can clip inside tight containers — ensure parent has `overflow: visible`.
 - **Test visually:** After any layout change, confirm in the browser that all text, inputs, buttons, and table columns are fully visible and not clipped. Scroll horizontally if the table is wide (`overflowX: auto` on DataTable).
 - **Consistent sizing:** Use monospace font at 13px for data cells, 16px for the order input. Keep padding consistent (8-14px for inputs, 10-14px for table cells).
+- **Resizable columns:** All DataTable columns must include `"resizable": True` so users can drag column borders to adjust widths. This applies to every table in the project (pricer, blotter, any new tables).
 
 ## Auto-Refresh Rules (MUST follow across ALL dashboard components)
 Auto-refresh updates ONLY calculations and live-feed data from the API. It must NEVER touch any field the user can manually edit.
