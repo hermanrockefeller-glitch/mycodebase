@@ -939,7 +939,6 @@ def create_layout(data_source="Mock Data"):
             dcc.Store(id="suppress-template", data=False),
             dcc.Store(id="auto-price-suppress", data=False),
             dcc.Store(id="blotter-edit-suppress", data=False),
-            dcc.Store(id="blotter-interaction-ts", data=0),
             # Polling infrastructure for cross-dashboard sync
             dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
             dcc.Store(id="file-mtime", data=current_mtime),
@@ -1002,7 +1001,6 @@ def create_blotter_layout():
             # Session data stores
             dcc.Store(id="order-store", data=orders),
             dcc.Store(id="blotter-edit-suppress", data=False),
-            dcc.Store(id="blotter-interaction-ts", data=0),
             # Polling infrastructure for cross-dashboard sync
             dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
             dcc.Store(id="file-mtime", data=current_mtime),

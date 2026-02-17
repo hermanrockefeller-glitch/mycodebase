@@ -13,10 +13,9 @@ app = Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Admin Dashboard"
 app.layout = create_blotter_layout
 
-# Register shared blotter callbacks + store-to-table push for live price updates.
-# enable_store_push=True is safe here: the Admin Dashboard has no
-# refresh_blotter_prices, so order-store only changes on external file polls.
-register_blotter_callbacks(enable_store_push=True)
+# Register shared blotter callbacks (poll, sync edits, column toggle).
+# Same protocol as pricer: table only updates on user action, not on store changes.
+register_blotter_callbacks()
 
 
 def main():

@@ -79,7 +79,8 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 - Both dashboards read/write `~/.options_pricer/orders.json` with atomic writes + cross-process file locking (`msvcrt` on Windows)
 - A `dcc.Interval` (2-second timer) checks `os.path.getmtime()` on the JSON file
 - Write suppression: after writing, the dashboard stamps `last-write-time = file_mtime` so it skips reloading its own changes
-- `blotter-edit-suppress` prevents feedback loops when the poll programmatically updates the blotter table
+- `blotter-edit-suppress` prevents feedback loops when `sync_blotter_edits` programmatically updates the blotter table
+- **Both dashboards use the same blotter protocol:** table only updates on user actions (`sync_blotter_edits`, `add_order`), never from store changes. Polling updates the `order-store` (fresh prices), which are picked up on the next user edit. This prevents React re-renders from disrupting editing UI (dropdowns, keystrokes, cell selection).
 
 ## Key Concepts
 - **Tied to (tt/vs):** The stock price at which the option package is quoted. Delta-hedged trades sell/buy stock at this price.

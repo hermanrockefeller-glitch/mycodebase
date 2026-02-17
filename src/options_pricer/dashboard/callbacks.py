@@ -4,8 +4,6 @@ Call ``register_blotter_callbacks()`` after creating a Dash app to wire up
 the polling, edit-sync, column-toggle, and column-visibility callbacks.
 """
 
-import time
-
 from dash import Input, Output, State, callback, no_update
 
 from ..order_store import (
@@ -84,18 +82,8 @@ def _sync_edits(blotter_data, orders):
     return updated_orders, display_rows, new_mtime
 
 
-def register_blotter_callbacks(enable_store_push=False):
-    """Register shared blotter callbacks for both dashboards.
-
-    Parameters
-    ----------
-    enable_store_push : bool
-        When True, register ``push_store_to_blotter`` which propagates
-        ``order-store`` changes to ``blotter-table.data``.  Only enable
-        on the Admin Dashboard (8051) — on the pricer (8050) this would
-        cause a full table re-render every second because
-        ``refresh_blotter_prices`` updates ``order-store`` on each tick.
-    """
+def register_blotter_callbacks():
+    """Register shared blotter callbacks for both dashboards."""
 
     @callback(
         Output("order-store", "data", allow_duplicate=True),
@@ -181,66 +169,3 @@ def register_blotter_callbacks(enable_store_push=False):
             return list(range(len(virtual_data)))
         return []
 
-    @callback(
-        Output("blotter-interaction-ts", "data"),
-        Input("blotter-table", "active_cell"),
-        prevent_initial_call=True,
-    )
-    def track_blotter_interaction(active_cell):
-        """Record when the user last clicked any blotter cell.
-
-        Used by push_store_to_blotter to avoid refreshing the table while
-        the user is interacting (opening dropdowns, typing in cells).
-        """
-        return time.time() * 1000
-
-    if enable_store_push:
-        @callback(
-            Output("blotter-table", "data", allow_duplicate=True),
-            Output("blotter-edit-suppress", "data", allow_duplicate=True),
-            Input("order-store", "data"),
-            State("blotter-interaction-ts", "data"),
-            State("blotter-table", "data_timestamp"),
-            State("blotter-table", "data"),
-            prevent_initial_call=True,
-        )
-        def push_store_to_blotter(orders, interaction_ts, data_ts, current_table_data):
-            """Push updated prices from order-store to the blotter table.
-
-            Only registered on the Admin Dashboard (8051).  Skips when the
-            user has interacted with the table in the last 10 seconds
-            (clicked a cell, opened a dropdown, edited a value) to avoid
-            resetting editing UI state.  Prices resume auto-updating after
-            10 seconds of no interaction.
-
-            Editable field values are ALWAYS preserved from the current
-            table — only price columns are updated from the store.
-            """
-            now_ms = time.time() * 1000
-
-            # Skip if user clicked any cell in the last 10 seconds
-            if interaction_ts and (now_ms - interaction_ts) < 10_000:
-                return no_update, no_update
-
-            # Skip if a cell was edited in the last 10 seconds
-            if data_ts and (now_ms - data_ts) < 10_000:
-                return no_update, no_update
-
-            if not orders:
-                return no_update, no_update
-
-            display_rows = orders_to_display(orders)
-
-            # Preserve editable field values from the current table.
-            # The store has fresh prices but may have stale editable values;
-            # the table always has the user's latest inputs.
-            if current_table_data:
-                table_by_id = {r["id"]: r for r in current_table_data if "id" in r}
-                for row in display_rows:
-                    table_row = table_by_id.get(row.get("id"))
-                    if table_row:
-                        for field in _EDITABLE_FIELDS:
-                            if field in table_row:
-                                row[field] = table_row[field]
-
-            return display_rows, True
