@@ -470,15 +470,7 @@ def _build_legs_from_table(table_data, underlying, order_qty):
         expiry_str = str(row.get("expiry", "")).strip()
         strike_val = row.get("strike")
         type_val = str(row.get("type", "")).strip()
-        # Support both new "ratio" format and old "side"+"qty" format
         ratio_val = row.get("ratio")
-        if ratio_val is None and "side" in row:
-            side_code = str(row.get("side", "")).strip()
-            qty = int(row.get("qty", 1) or 1)
-            if side_code == "B":
-                ratio_val = qty
-            elif side_code == "S":
-                ratio_val = -qty
 
         row_has_data = bool(expiry_str or strike_val or type_val or ratio_val)
         if not row_has_data:
