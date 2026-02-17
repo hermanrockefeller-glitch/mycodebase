@@ -5,7 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from options_pricer.order_store import add_order, load_orders, save_orders, update_order
+from options_pricer.order_store import (
+    _file_lock,
+    add_order,
+    get_orders_mtime,
+    load_orders,
+    orders_to_display,
+    save_orders,
+    save_orders_locked,
+    update_order,
+)
 
 
 class TestLoadOrders:
@@ -87,3 +96,111 @@ class TestUpdateOrder:
         result = update_order("nonexistent", {"traded": "Yes"}, fp)
         # Original unchanged
         assert result[0]["traded"] == "No"
+
+
+class TestFileLock:
+    def test_lock_acquire_release(self, tmp_path):
+        """Lock can be acquired and released without error."""
+        fp = tmp_path / "orders.json"
+        save_orders([], fp)
+        with _file_lock(fp):
+            pass  # No exception = success
+
+    def test_lock_protects_write(self, tmp_path):
+        """add_order with lock persists correctly."""
+        fp = tmp_path / "orders.json"
+        result = add_order({"id": "1", "underlying": "AAPL"}, fp)
+        assert len(result) == 1
+        assert load_orders(fp)[0]["id"] == "1"
+
+    def test_save_orders_locked(self, tmp_path):
+        """save_orders_locked persists under lock."""
+        fp = tmp_path / "orders.json"
+        save_orders_locked([{"id": "x", "data": "test"}], fp)
+        loaded = load_orders(fp)
+        assert len(loaded) == 1
+        assert loaded[0]["id"] == "x"
+
+
+class TestRecallByIdAfterSort:
+    """Verify that looking up an order by id from a sorted display list
+    returns the correct full order — the core logic the recall callback
+    depends on."""
+
+    def test_sorted_display_matches_correct_order(self, tmp_path):
+        fp = tmp_path / "orders.json"
+
+        # Two orders with different structures and recall data
+        order_a = {
+            "id": "aaa",
+            "added_time": "09:00",
+            "underlying": "AAPL",
+            "structure": "CALL 300C Jun26",
+            "_table_data": [{"leg": "Leg 1", "strike": 300, "type": "C"}],
+            "_underlying": "AAPL",
+        }
+        order_b = {
+            "id": "bbb",
+            "added_time": "10:00",
+            "underlying": "SPX",
+            "structure": "PUT SPREAD 4000/4050 Jun26",
+            "_table_data": [
+                {"leg": "Leg 1", "strike": 4050, "type": "P"},
+                {"leg": "Leg 2", "strike": 4000, "type": "P"},
+            ],
+            "_underlying": "SPX",
+        }
+
+        orders = [order_a, order_b]
+        save_orders(orders, fp)
+        loaded = load_orders(fp)
+
+        # Display rows strip underscore fields but keep id
+        display = orders_to_display(loaded)
+        assert display[0]["id"] == "aaa"
+        assert display[1]["id"] == "bbb"
+        assert "_table_data" not in display[0]
+        assert "_table_data" not in display[1]
+
+        # Simulate sorted view (time desc → B first, A second)
+        sorted_view = list(reversed(display))
+        assert sorted_view[0]["id"] == "bbb"  # visually row 0
+        assert sorted_view[1]["id"] == "aaa"  # visually row 1
+
+        # Clicking row 0 in sorted view should give SPX, not AAPL
+        clicked_id = sorted_view[0]["id"]
+        recalled = next(o for o in loaded if o["id"] == clicked_id)
+        assert recalled["underlying"] == "SPX"
+        assert recalled["_underlying"] == "SPX"
+        assert len(recalled["_table_data"]) == 2
+        assert recalled["_table_data"][0]["strike"] == 4050
+
+        # Clicking row 1 in sorted view should give AAPL
+        clicked_id = sorted_view[1]["id"]
+        recalled = next(o for o in loaded if o["id"] == clicked_id)
+        assert recalled["underlying"] == "AAPL"
+        assert recalled["_underlying"] == "AAPL"
+        assert len(recalled["_table_data"]) == 1
+        assert recalled["_table_data"][0]["strike"] == 300
+
+
+class TestGetOrdersMtime:
+    def test_missing_file_returns_zero(self, tmp_path):
+        fp = tmp_path / "orders.json"
+        assert get_orders_mtime(fp) == 0.0
+
+    def test_returns_nonzero_for_existing(self, tmp_path):
+        fp = tmp_path / "orders.json"
+        save_orders([], fp)
+        mtime = get_orders_mtime(fp)
+        assert mtime > 0.0
+
+    def test_mtime_changes_after_write(self, tmp_path):
+        import time
+        fp = tmp_path / "orders.json"
+        save_orders([], fp)
+        mtime1 = get_orders_mtime(fp)
+        time.sleep(0.05)  # Ensure filesystem mtime granularity
+        save_orders([{"id": "1"}], fp)
+        mtime2 = get_orders_mtime(fp)
+        assert mtime2 > mtime1

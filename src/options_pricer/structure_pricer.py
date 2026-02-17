@@ -4,7 +4,6 @@ from .models import (
     LegMarketData,
     OptionLeg,
     ParsedOrder,
-    Side,
     StructureMarketData,
 )
 
@@ -14,21 +13,18 @@ def price_structure_from_market(
     leg_market: list[LegMarketData],
     stock_price: float,
 ) -> StructureMarketData:
-    """Calculate structure bid/offer/mid from screen market data.
+    """Calculate per-unit structure bid/offer/mid from screen market data.
 
-    For each leg, the contribution to structure bid/offer depends on
-    the leg's side (buy/sell):
-      - BUY leg: buyer pays the offer, seller receives the bid
-      - SELL leg: buyer receives the bid, seller pays the offer
+    Uses signed ratios (positive = BUY, negative = SELL) normalised to the
+    smallest leg so the result is a per-structure price independent of order
+    size.
 
-    Structure BID = what the market would pay you for the structure
-      = sum of (leg_bid * qty) for SELL legs - sum of (leg_offer * qty) for BUY legs
+    For each leg with signed ratio *s*:
+      s > 0 (BUY):  bid += s * leg_bid,   offer += s * leg_offer
+      s < 0 (SELL):  bid += s * leg_offer, offer += s * leg_bid
 
-    Structure OFFER = what it costs to buy the structure from the market
-      = sum of (leg_offer * qty) for BUY legs - sum of (leg_bid * qty) for SELL legs
-
-    For structures quoted as net premium (e.g., spreads), the sign convention
-    follows the net flow.
+    A tie adjustment is added when the order has a stock ref and delta:
+      tie_adj = (delta / 100) * (spot - ref)
     """
     legs = order.structure.legs
 
@@ -37,31 +33,30 @@ def price_structure_from_market(
             f"Leg count mismatch: {len(legs)} legs but {len(leg_market)} market entries"
         )
 
-    # Calculate structure bid and offer
-    # Bid: the price at which the market bids for the structure
-    # Offer: the price at which the market offers the structure
+    base_qty = min(leg.quantity for leg in legs) if legs else 1
+    if base_qty <= 0:
+        base_qty = 1
+
     struct_bid = 0.0
     struct_offer = 0.0
 
     for leg, mkt in zip(legs, leg_market):
-        if leg.side == Side.BUY:
-            # Buyer of the structure buys this leg
-            # Structure bid: sell to market -> you sell this leg at bid
-            struct_bid -= mkt.bid * leg.quantity
-            # Structure offer: buy from market -> you buy this leg at offer
-            struct_offer -= mkt.offer * leg.quantity
-        else:
-            # Buyer of the structure sells this leg
-            # Structure bid: sell to market -> you buy back at offer
-            struct_bid += mkt.offer * leg.quantity
-            # Structure offer: buy from market -> you sell at bid
-            struct_offer += mkt.bid * leg.quantity
+        ratio = leg.quantity // base_qty
+        signed = leg.direction * ratio  # +ratio for BUY, -ratio for SELL
 
-    # Normalize so bid < offer (structure bid is what you receive, offer is what you pay)
-    # Convention: positive = net credit, negative = net debit
-    # We want bid <= offer in absolute terms
-    if struct_bid > struct_offer:
-        struct_bid, struct_offer = struct_offer, struct_bid
+        if signed > 0:
+            struct_bid += signed * mkt.bid
+            struct_offer += signed * mkt.offer
+        elif signed < 0:
+            struct_bid += signed * mkt.offer
+            struct_offer += signed * mkt.bid
+
+    # Tie adjustment for structures with a stock reference
+    tie_adj = 0.0
+    if order.stock_ref > 0 and order.delta != 0:
+        tie_adj = (order.delta / 100.0) * (stock_price - order.stock_ref)
+    struct_bid += tie_adj
+    struct_offer += tie_adj
 
     # Calculate structure sizes (limited by thinnest leg adjusted for ratio)
     struct_bid_size = _calc_structure_size(legs, leg_market, for_bid=True)
@@ -86,22 +81,28 @@ def _calc_structure_size(
 ) -> int:
     """Calculate max structure quantity based on screen liquidity.
 
-    Each leg's available size is divided by its quantity-per-structure
+    Each leg's available size is divided by its ratio-per-structure
     to find how many structures can be filled.
     """
     min_structures = float("inf")
     base_qty = min(leg.quantity for leg in legs) if legs else 1
+    if base_qty <= 0:
+        base_qty = 1
 
     for leg, mkt in zip(legs, leg_market):
+        is_buy = leg.direction > 0
         if for_bid:
-            # To sell the structure: buy legs at offer, sell legs at bid
-            available = mkt.bid_size if leg.side == Side.SELL else mkt.offer_size
+            # Structure bid: someone buys from market
+            # BUY legs → need offer_size, SELL legs → need bid_size
+            available = mkt.offer_size if is_buy else mkt.bid_size
         else:
-            # To buy the structure: buy legs at offer, sell legs at bid
-            available = mkt.offer_size if leg.side == Side.BUY else mkt.bid_size
+            # Structure offer: someone sells to market
+            # BUY legs → need bid_size, SELL legs → need offer_size
+            available = mkt.bid_size if is_buy else mkt.offer_size
 
-        if leg.quantity > 0:
-            structures_possible = available / (leg.quantity / base_qty)
+        ratio = leg.quantity / base_qty
+        if ratio > 0:
+            structures_possible = available / ratio
             min_structures = min(min_structures, structures_possible)
 
     return int(min_structures) if min_structures != float("inf") else 0

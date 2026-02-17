@@ -30,7 +30,7 @@ Structure types: put spreads, call spreads, risk reversals, straddles, strangles
 - **Dash (Plotly)** — web dashboard
 - **NumPy / SciPy** — numerical pricing
 - **blpapi** — Bloomberg Terminal API (falls back to mock when Terminal not running)
-- **pytest** — 94 tests
+- **pytest** — 100 tests
 
 ## Project Structure
 

@@ -9,6 +9,7 @@ from options_pricer.parser import (
     parse_order,
     _extract_stock_ref,
     _extract_delta,
+    _extract_delta_direction,
     _extract_quantity,
     _extract_price_and_side,
     _extract_ratio,
@@ -163,7 +164,7 @@ class TestParseOrder:
         order = parse_order("UBER Jun26 45P tt69.86 3d 0.41 bid 1058x")
         assert order.underlying == "UBER"
         assert order.stock_ref == 69.86
-        assert order.delta == 3.0
+        assert order.delta == -3.0
         assert order.price == 0.41
         assert order.quote_side == QuoteSide.BID
         assert len(order.structure.legs) == 1
@@ -175,7 +176,7 @@ class TestParseOrder:
         order = parse_order("QCOM 85P Jan27 tt141.17 7d 2.4b 600x")
         assert order.underlying == "QCOM"
         assert order.stock_ref == 141.17
-        assert order.delta == 7.0
+        assert order.delta == -7.0
         assert order.price == 2.4
         assert order.quote_side == QuoteSide.BID
         assert order.quantity == 600
@@ -188,7 +189,7 @@ class TestParseOrder:
         order = parse_order("VST Apr 130p 500 @ 2.55 tt 171.10 on a 11d")
         assert order.underlying == "VST"
         assert order.stock_ref == 171.10
-        assert order.delta == 11.0
+        assert order.delta == -11.0
         assert order.price == 2.55
         assert order.quote_side == QuoteSide.OFFER
         leg = order.structure.legs[0]
@@ -219,18 +220,18 @@ class TestParseOrder:
         )
         assert order.underlying == "AAPL"
         assert order.stock_ref == 250.0
-        assert order.delta == 15.0
+        assert order.delta == -15.0
         assert order.price == 3.50
         assert len(order.structure.legs) == 2
-        # Sell higher strike (240P), buy lower strike (220P) at 2x
-        sell_leg = [l for l in order.structure.legs if l.side == Side.SELL][0]
+        # Buy higher strike (240P), sell lower strike (220P) at 2x
         buy_leg = [l for l in order.structure.legs if l.side == Side.BUY][0]
-        assert sell_leg.strike == 240.0
-        assert sell_leg.option_type == OptionType.PUT
-        assert sell_leg.quantity == 500  # 500 * r1(1)
-        assert buy_leg.strike == 220.0
+        sell_leg = [l for l in order.structure.legs if l.side == Side.SELL][0]
+        assert buy_leg.strike == 240.0
         assert buy_leg.option_type == OptionType.PUT
-        assert buy_leg.quantity == 1000  # 500 * r2(2)
+        assert buy_leg.quantity == 500  # 500 * r1(1)
+        assert sell_leg.strike == 220.0
+        assert sell_leg.option_type == OptionType.PUT
+        assert sell_leg.quantity == 1000  # 500 * r2(2)
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
@@ -239,3 +240,275 @@ class TestParseOrder:
     def test_ticker_uppercased(self):
         order = parse_order("aapl Jun26 300 calls vs250 30d 5.00 bid 100x")
         assert order.underlying == "AAPL"
+
+
+class TestExtractRatioThreePart:
+    def test_three_part_integer(self):
+        assert _extract_ratio("fly 1x2x1") == (1.0, 2.0, 1.0)
+
+    def test_three_part_decimal(self):
+        assert _extract_ratio("fly 1x1.5x1") == (1.0, 1.5, 1.0)
+
+    def test_two_part_still_works(self):
+        assert _extract_ratio("PS 1X2 500x") == (1, 2)
+
+
+class TestExtractDeltaDirection:
+    def test_dp_suffix(self):
+        assert _extract_delta("30dp") == 30.0
+
+    def test_dc_suffix(self):
+        assert _extract_delta("20dc") == 20.0
+
+    def test_direction_dp(self):
+        assert _extract_delta_direction("30dp") == "put"
+
+    def test_direction_dc(self):
+        assert _extract_delta_direction("20dc") == "call"
+
+
+class TestExtractStructureTypeNew:
+    def test_iron_butterfly_if(self):
+        assert _extract_structure_type("SPX Jun26 4000/4050/4100 IF") == "iron_butterfly"
+
+    def test_iron_butterfly_ibf(self):
+        assert _extract_structure_type("SPX Jun26 4000/4050/4100 IBF") == "iron_butterfly"
+
+    def test_put_fly_pf(self):
+        assert _extract_structure_type("AAPL Jun26 220/230/240 PF") == "put_fly"
+
+    def test_call_fly_cf(self):
+        assert _extract_structure_type("AAPL Jun26 280/290/300 CF") == "call_fly"
+
+
+class TestParseOrderNewStructures:
+    def test_put_fly(self):
+        order = parse_order("AAPL Jun26 220/230/240 PF vs250 30dp 500x")
+        assert order.underlying == "AAPL"
+        assert order.stock_ref == 250.0
+        assert order.delta == -30.0
+        assert order.quantity == 500
+        assert len(order.structure.legs) == 3
+        assert order.structure.name == "put fly"
+        for leg in order.structure.legs:
+            assert leg.option_type == OptionType.PUT
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].strike == 220.0
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 230.0
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].strike == 240.0
+        assert sorted_legs[2].side == Side.BUY
+
+    def test_call_fly(self):
+        order = parse_order("AAPL Jun26 280/290/300 CF vs250 20dc 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == 20.0
+        assert len(order.structure.legs) == 3
+        assert order.structure.name == "call fly"
+        for leg in order.structure.legs:
+            assert leg.option_type == OptionType.CALL
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].strike == 280.0
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 290.0
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].strike == 300.0
+        assert sorted_legs[2].side == Side.BUY
+
+    def test_iron_butterfly(self):
+        order = parse_order("SPX Jun26 4000/4050/4100 IF vs4050 5d 100x")
+        assert order.underlying == "SPX"
+        assert order.delta == 5.0
+        assert order.quantity == 100
+        assert len(order.structure.legs) == 4
+        assert order.structure.name == "iron butterfly"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: (l.strike, l.option_type.value))
+        # Low put (buy), mid put (sell), mid call (sell), high call (buy)
+        assert sorted_legs[0].strike == 4000.0
+        assert sorted_legs[0].option_type == OptionType.PUT
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 4050.0
+        assert sorted_legs[1].option_type == OptionType.CALL
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].strike == 4050.0
+        assert sorted_legs[2].option_type == OptionType.PUT
+        assert sorted_legs[2].side == Side.SELL
+        assert sorted_legs[3].strike == 4100.0
+        assert sorted_legs[3].option_type == OptionType.CALL
+        assert sorted_legs[3].side == Side.BUY
+
+    def test_butterfly_custom_ratio(self):
+        order = parse_order("AAPL Jun26 220/230/240 fly 1x1.5x1 vs250 10d 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == 10.0
+        assert len(order.structure.legs) == 3
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].quantity == 500   # 500 * 1
+        assert sorted_legs[1].quantity == 750   # 500 * 1.5
+        assert sorted_legs[2].quantity == 500   # 500 * 1
+
+    def test_single_call_displays_as_call(self):
+        order = parse_order("AAPL Jun26 300 calls vs250 30d")
+        assert order.structure.name == "call"
+        assert order.delta == 30.0
+
+    def test_single_put_displays_as_put(self):
+        order = parse_order("UBER Jun26 45P tt69.86 3dp")
+        assert order.structure.name == "put"
+        assert order.delta == -3.0
+
+
+class TestDeltaSignInference:
+    def test_risk_reversal_putover_delta_sign(self):
+        order = parse_order("AAPL jun 240 260 1x2 RR vs248 90d 6 bid 400x put over")
+        assert order.underlying == "AAPL"
+        assert order.stock_ref == 248.0
+        assert order.delta == -90.0  # put over → negative delta
+        assert order.price == 6.0
+        assert order.quote_side == QuoteSide.BID
+        assert order.quantity == 400
+        assert len(order.structure.legs) == 2
+        assert order.structure.name == "risk reversal"
+
+
+class TestExtractStructureTypeCondors:
+    def test_iron_condor_ic(self):
+        assert _extract_structure_type("SPX Jun26 3900/3950/4100/4150 IC") == "iron_condor"
+
+    def test_put_condor_pc(self):
+        assert _extract_structure_type("AAPL Jun26 200/210/220/230 PC") == "put_condor"
+
+    def test_call_condor_cc(self):
+        assert _extract_structure_type("AAPL Jun26 280/290/300/310 CC") == "call_condor"
+
+    def test_call_spread_collar_csc(self):
+        assert _extract_structure_type("AAPL Jun26 220/250/260 CSC") == "call_spread_collar"
+
+    def test_put_spread_collar_psc(self):
+        assert _extract_structure_type("AAPL Jun26 200/220/260 PSC") == "put_spread_collar"
+
+
+class TestParseOrderCondorsCollars:
+    def test_iron_condor(self):
+        order = parse_order("SPX Jun26 3900/3950/4100/4150 IC vs4050 5d 100x")
+        assert order.underlying == "SPX"
+        assert order.delta == 5.0
+        assert order.quantity == 100
+        assert len(order.structure.legs) == 4
+        assert order.structure.name == "iron condor"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: (l.strike, l.option_type.value))
+        assert sorted_legs[0].strike == 3900.0
+        assert sorted_legs[0].option_type == OptionType.PUT
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 3950.0
+        assert sorted_legs[1].option_type == OptionType.PUT
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].strike == 4100.0
+        assert sorted_legs[2].option_type == OptionType.CALL
+        assert sorted_legs[2].side == Side.SELL
+        assert sorted_legs[3].strike == 4150.0
+        assert sorted_legs[3].option_type == OptionType.CALL
+        assert sorted_legs[3].side == Side.BUY
+
+    def test_put_condor(self):
+        order = parse_order("AAPL Jun26 200/210/220/230 PC vs250 10dp 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == -10.0
+        assert len(order.structure.legs) == 4
+        assert order.structure.name == "put condor"
+        for leg in order.structure.legs:
+            assert leg.option_type == OptionType.PUT
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].side == Side.SELL
+        assert sorted_legs[3].side == Side.BUY
+
+    def test_call_condor(self):
+        order = parse_order("AAPL Jun26 280/290/300/310 CC vs250 15dc 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == 15.0
+        assert len(order.structure.legs) == 4
+        assert order.structure.name == "call condor"
+        for leg in order.structure.legs:
+            assert leg.option_type == OptionType.CALL
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].side == Side.SELL
+        assert sorted_legs[3].side == Side.BUY
+
+    def test_call_spread_collar(self):
+        order = parse_order("AAPL Jun26 220/250/260 CSC vs250 20d 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == 20.0
+        assert len(order.structure.legs) == 3
+        assert order.structure.name == "call spread collar"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        # Buy put at lowest, sell call at mid, buy call at highest
+        assert sorted_legs[0].strike == 220.0
+        assert sorted_legs[0].option_type == OptionType.PUT
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 250.0
+        assert sorted_legs[1].option_type == OptionType.CALL
+        assert sorted_legs[1].side == Side.SELL
+        assert sorted_legs[2].strike == 260.0
+        assert sorted_legs[2].option_type == OptionType.CALL
+        assert sorted_legs[2].side == Side.BUY
+
+    def test_put_spread_collar(self):
+        order = parse_order("AAPL Jun26 200/220/260 PSC vs250 15d 500x")
+        assert order.underlying == "AAPL"
+        assert order.delta == 15.0
+        assert len(order.structure.legs) == 3
+        assert order.structure.name == "put spread collar"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        # Sell put at lowest, buy put at mid, sell call at highest
+        assert sorted_legs[0].strike == 200.0
+        assert sorted_legs[0].option_type == OptionType.PUT
+        assert sorted_legs[0].side == Side.SELL
+        assert sorted_legs[1].strike == 220.0
+        assert sorted_legs[1].option_type == OptionType.PUT
+        assert sorted_legs[1].side == Side.BUY
+        assert sorted_legs[2].strike == 260.0
+        assert sorted_legs[2].option_type == OptionType.CALL
+        assert sorted_legs[2].side == Side.SELL
+
+
+class TestParseOrderStupid:
+    def test_put_stupid(self):
+        order = parse_order("AAPL Jun26 250 240 put stupid live 500x")
+        assert order.underlying == "AAPL"
+        assert order.quantity == 500
+        assert len(order.structure.legs) == 2
+        assert order.structure.name == "put stupid"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].strike == 240.0
+        assert sorted_legs[0].option_type == OptionType.PUT
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 250.0
+        assert sorted_legs[1].option_type == OptionType.PUT
+        assert sorted_legs[1].side == Side.BUY
+
+    def test_call_stupid(self):
+        order = parse_order("AAPL Jun26 260 270 call stupid live 300x")
+        assert order.underlying == "AAPL"
+        assert order.quantity == 300
+        assert len(order.structure.legs) == 2
+        assert order.structure.name == "call stupid"
+        sorted_legs = sorted(order.structure.legs, key=lambda l: l.strike)
+        assert sorted_legs[0].strike == 260.0
+        assert sorted_legs[0].option_type == OptionType.CALL
+        assert sorted_legs[0].side == Side.BUY
+        assert sorted_legs[1].strike == 270.0
+        assert sorted_legs[1].option_type == OptionType.CALL
+        assert sorted_legs[1].side == Side.BUY
+
+    def test_put_stupid_delta_sign(self):
+        order = parse_order("AAPL Jun26 250 240 put stupid vs248 30d 500x")
+        assert order.delta == -30.0  # put stupid → negative delta
+
+    def test_call_stupid_delta_sign(self):
+        order = parse_order("AAPL Jun26 260 270 call stupid vs265 25d 300x")
+        assert order.delta == 25.0  # call stupid → positive delta

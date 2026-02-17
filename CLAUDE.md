@@ -10,7 +10,7 @@ The core use case: broker sends an order like `AAPL Jun26 240/220 PS 1X2 vs250 1
 - **Dash (Plotly)** — web dashboard
 - **NumPy / SciPy** — numerical pricing
 - **blpapi 3.25.12** — Bloomberg Terminal API (installed; falls back to mock when Terminal not running)
-- **pytest** — 94 tests, all passing
+- **pytest** — 133 tests, all passing
 
 ## Project Structure
 ```
@@ -20,15 +20,17 @@ src/options_pricer/
 ├── pricer.py            # Black-Scholes pricing engine + Greeks (delta, gamma, theta, vega, rho)
 ├── structure_pricer.py  # Calculates structure bid/offer/mid from individual leg screen prices
 ├── bloomberg.py         # BloombergClient (live) + MockBloombergClient (BS-based realistic quotes)
-├── order_store.py       # JSON persistence for orders (~/.options_pricer/orders.json)
+├── order_store.py       # JSON persistence + cross-process file locking (~/.options_pricer/orders.json)
 └── dashboard/
-    ├── app.py           # Dash web app entry point + callbacks (pricer, order blotter, column toggle)
-    └── layouts.py       # UI layout: order input, pricer toolbar+table, order blotter, column toggle
+    ├── app.py           # Dash web app entry point + pricer-specific callbacks
+    ├── blotter_app.py   # Standalone blotter dashboard (port 8051) — shares orders.json
+    ├── callbacks.py     # Shared blotter callbacks (poll, sync edits, column toggle/visibility)
+    └── layouts.py       # UI layouts: pricer dashboard, blotter-only dashboard, shared components
 tests/
 ├── test_models.py       # 17 tests — payoffs, structures
-├── test_parser.py       # 43 tests — extraction helpers + full order parsing for all IDB formats
-├── test_order_store.py  # 11 tests — JSON persistence (load, save, add, update)
-└── test_pricer.py       # 23 tests — BS pricing, put-call parity, Greeks, structure pricing
+├── test_parser.py       # 68 tests — extraction helpers + full order parsing for all IDB formats
+├── test_order_store.py  # 17 tests — JSON persistence, file locking, mtime helpers
+└── test_pricer.py       # 25 tests — BS pricing, put-call parity, Greeks, structure pricing
 ```
 
 ## Broker Shorthand Format
@@ -40,8 +42,9 @@ The parser handles flexible, messy real-world broker shorthand with tokens in an
 **Quantity:** `1058x`, `600x`, `2500x`, `1k` (= 1000), `2k` (= 2000)
 **Strike+type:** `45P`, `300C`, `130p`, `240/220`
 **Expiry:** `Jun26`, `Jan27`, `Apr` (no year = nearest upcoming)
-**Structure types:** `PS` (put spread), `CS` (call spread), `Risky` (risk reversal), `straddle`, `strangle`, `fly` (butterfly), `collar`
-**Ratios:** `1X2`, `1x3`
+**Delta direction:** `30dp` (put delta = -30), `20dc` (call delta = +20)
+**Structure types:** `PS` (put spread), `CS` (call spread), `Risky` (risk reversal), `straddle`, `strangle`, `fly` (butterfly), `PF` (put fly), `CF` (call fly), `IF`/`IBF` (iron butterfly), `IC` (iron condor), `PC` (put condor), `CC` (call condor), `collar`, `CSC` (call spread collar), `PSC` (put spread collar)
+**Ratios:** `1X2`, `1x3`, `1x1.5x1`, `1x2x1` (3-part for butterfly-type structures)
 **Modifiers:** `putover`, `put over`, `callover`, `call over`, `1X over`
 
 ### Example Orders
@@ -52,6 +55,13 @@ QCOM 85P Jan27 tt141.17 7d 2.4b 600x
 VST Apr 130p 500 @ 2.55 tt 171.10 on a 11d
 IWM feb 257 apr 280 Risky vs 262.54 52d 2500x @ 1.60
 AAPL Jun26 240/220 PS 1X2 vs250 15d 500x @ 3.50 1X over
+AAPL Jun26 220/230/240 PF vs250 30dp 500x
+AAPL Jun26 280/290/300 CF vs250 20dc 500x
+SPX Jun26 4000/4050/4100 IF vs4050 5d 100x
+AAPL Jun26 220/230/240 fly 1x1.5x1 vs250 10d 500x
+SPX Jun26 3900/3950/4100/4150 IC vs4050 5d 100x
+AAPL Jun26 200/210/220/230 PC vs250 10dp 500x
+AAPL Jun26 220/250/260 CSC vs250 20d 500x
 ```
 
 ## Dashboard Display
@@ -61,21 +71,34 @@ AAPL Jun26 240/220 PS 1X2 vs250 15d 500x @ 3.50 1X over
 - **Pricing table:** Editable DataTable — Leg | Expiry | Strike | Type | Side | Qty | Bid Size | Bid | Mid | Offer | Offer Size. Editing triggers auto-reprice.
   - Structure row at bottom with implied bid/offer/mid and sizes
 - **Broker quote section:** Shows broker price vs screen mid and edge
-- **Order Blotter:** Persistent library of all priced structures. 15 columns (6 editable: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Native sort (default: time desc). Click row to recall into pricer. PnL auto-calcs for traded orders. Data persists to `~/.options_pricer/orders.json`.
+- **Order Blotter:** Persistent library of all priced structures. 15 columns (6 editable: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Native sort (default: time desc). Click row to recall into pricer. PnL auto-calcs for traded orders. Data persists to `~/.options_pricer/orders.json`. **Syncs across dashboards** via 2-second file polling.
+- **Standalone Blotter (port 8051):** Blotter-only dashboard — shows the same order data, editable cells, column toggle. No pricer or parser. Edits sync bidirectionally with the pricer dashboard.
 - **Architecture:** Toolbar is always visible; "Add Order" validates a structure is priced. Hidden ID stubs (`order-input-section`, `order-side`, `order-size`) exist for Dash callback compatibility after the standalone order input section was removed.
+
+## Cross-Dashboard Sync Architecture
+- Both dashboards read/write `~/.options_pricer/orders.json` with atomic writes + cross-process file locking (`msvcrt` on Windows)
+- A `dcc.Interval` (2-second timer) checks `os.path.getmtime()` on the JSON file
+- Write suppression: after writing, the dashboard stamps `last-write-time = file_mtime` so it skips reloading its own changes
+- `blotter-edit-suppress` prevents feedback loops when the poll programmatically updates the blotter table
 
 ## Key Concepts
 - **Tied to (tt/vs):** The stock price at which the option package is quoted. Delta-hedged trades sell/buy stock at this price.
 - **Delta-neutral packages:** Quantity × 100 × delta = stock hedge shares
 - **Ratio spreads (1X2):** Unequal legs, e.g., sell 1x 240P, buy 2x 220P. "1X over" = 1 extra ratio on the buy side.
 - **Putover/callover:** Which leg of a risk reversal is worth more (determines buy/sell direction)
+- **Iron butterfly:** Sell ATM straddle + buy OTM wings (3 strikes → 4 legs). Aliases: `IF`, `IBF`, `iron fly`
+- **Put fly / Call fly:** 3-leg butterfly using all puts or all calls. Aliases: `PF`, `CF`, `putfly`, `callfly`
+- **3-part ratios (1x1.5x1):** Custom ratios for butterfly-type structures. Middle leg ratio doesn't have to be 2x
+- **Condors (IC/PC/CC):** 4-leg, 4-strike structures. Iron condor mixes puts+calls; put/call condor uses single type
+- **Spread collars (CSC/PSC):** 3-leg collar variants. CSC = buy put + sell call spread. PSC = buy put spread + sell call
 - **Structure bid/offer:** Calculated from screen prices — bid uses worst fills (buy at offer, sell at bid), offer uses best fills
 
 ## Key Commands
 ```bash
-source .venv/Scripts/activate          # Windows (Git Bash)
-pytest tests/ -v                       # Run all 94 tests
-python -m options_pricer.dashboard.app # Launch dashboard at http://127.0.0.1:8050
+source .venv/Scripts/activate                      # Windows (Git Bash)
+pytest tests/ -v                                   # Run all 133 tests
+python -m options_pricer.dashboard.app             # Launch pricer dashboard at http://127.0.0.1:8050
+python -m options_pricer.dashboard.blotter_app     # Launch blotter dashboard at http://127.0.0.1:8051
 ```
 
 ## UI Rules (MUST follow when editing layouts.py or any dashboard styling)
@@ -88,14 +111,37 @@ python -m options_pricer.dashboard.app # Launch dashboard at http://127.0.0.1:80
 - **Test visually:** After any layout change, confirm in the browser that all text, inputs, buttons, and table columns are fully visible and not clipped. Scroll horizontally if the table is wide (`overflowX: auto` on DataTable).
 - **Consistent sizing:** Use monospace font at 13px for data cells, 16px for the order input. Keep padding consistent (8-14px for inputs, 10-14px for table cells).
 
+## Auto-Refresh Rules (MUST follow across ALL dashboard components)
+Auto-refresh updates ONLY calculations and live-feed data from the API. It must NEVER touch any field the user can manually edit.
+
+- **Principle: auto-refresh = calculations + live feed ONLY.** Any column or cell that accepts manual user input is off-limits to auto-refresh. Only overwrite values that come from the API (prices, sizes) or are computed from them (mid, PnL). This applies to every table, every callback, every dashboard — not just the blotter.
+- **CRITICAL: Never let a timer/interval callback write to a DataTable's `data` property.** Any assignment to `data` — even `Patch()`, even identical values — triggers a React re-render that resets all editing UI state (closes open dropdowns, clears in-progress keystrokes, deselects cells). This is a Dash/React limitation with no workaround.
+- **Architecture: separate timer callbacks from table callbacks.** Timer-driven callbacks (`dcc.Interval`) must only output to display-only HTML components (`html.Div`, `html.Span`) and `dcc.Store` components. Table updates (`pricing-display.data`, `blotter-table.data`) must only happen in response to user actions (cell edit via `data_timestamp`, button click, parse order, etc.).
+- **Current implementation:**
+  - `auto_price_from_table` — triggered by `data_timestamp` + `manual-underlying` only (NO interval). Updates pricer table + header + broker quote.
+  - `refresh_live_display` — triggered by `live-refresh-interval` only. Updates header (live stock price) + broker quote (edge). Never touches any DataTable.
+  - `refresh_blotter_prices` — triggered by `live-refresh-interval`. Updates `order-store` (client-side store) only. No file write, no `blotter-table.data` output.
+- **Blotter table:** 6 editable fields (`side`, `size`, `traded`, `bought_sold`, `traded_price`, `initiator`) must never be overwritten. Only update pricing columns and computed `pnl`.
+- **Wrap API calls in try/except.** Bloomberg fetch errors must not crash the refresh callback — a single bad ticker should not break repricing for all orders.
+
+## Bloomberg Failure Visibility (MUST follow for all pricing displays)
+Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently show zero prices or fallback values.
+
+- **Connection-level**: When Bloomberg is selected but `get_spot()` returns `None`, show RED badge + alert banner at top of dashboard. Badge auto-reverts to green when Bloomberg recovers.
+- **Cell-level**: When a quote returns `bid=0 AND offer=0`, display `--` not `0.00`. Zero is never a valid displayed price — a real zero-bid option still has an offer.
+- **Structure-level**: If ANY leg has a failed quote, the structure summary row must also show `--`. Don't compute a structure price from partially invalid data.
+- **Blotter propagation**: Same `--` formatting applies to blotter pricing columns. PnL shows empty when mid is `--`.
+- **Never show "0.00" as a price** in any table cell. Any code path that formats prices for display must check for zeros and use `--`.
+
 ## Current Status & Next Steps
 - Parser handles all example formats provided so far (including `Nk` quantity format) — feed more real orders to refine
 - Bloomberg API integrated but needs Terminal running for live data; mock works for dev
 - Order Blotter with JSON persistence, editable cells, column toggle, PnL auto-calc, and recall working
+- Cross-dashboard sync: pricer (8050) + standalone blotter (8051) share orders.json with polling + file locking
 - Next: delta adjustment for stock tie vs current price in structure pricing
-- Next: more structure types as needed (iron condors, diagonals, etc.)
+- Structure types: call, put, put spread, call spread, risk reversal, straddle, strangle, butterfly, put fly, call fly, iron butterfly, iron condor, put condor, call condor, collar, call spread collar, put spread collar
+- Next: more structure types as needed (diagonals, etc.)
 - Next: SPX/index options with combo pricing
-- Next: cross-dashboard sharing (order_store.py infrastructure is ready)
 
 ## GitHub
 - Repo: https://github.com/hermanrockefeller-glitch/mycodebase.git

@@ -2,7 +2,7 @@
 
 from dash import dcc, html, dash_table
 
-from ..order_store import load_orders
+from ..order_store import get_orders_mtime, load_orders, orders_to_display
 
 # Reusable styles
 _INPUT_STYLE = {
@@ -24,22 +24,56 @@ _DROPDOWN_STYLE = {
 
 _LABEL_STYLE = {"color": "#aaa", "fontSize": "12px", "marginBottom": "4px"}
 
+# Data source badge styles (shared with app.py toggle callback)
+BADGE_STYLE_BASE = {
+    "padding": "4px 10px",
+    "borderRadius": "12px",
+    "fontSize": "12px",
+    "fontFamily": "monospace",
+    "color": "white",
+}
+BADGE_GREEN = {**BADGE_STYLE_BASE, "backgroundColor": "#198754"}
+BADGE_BLUE = {**BADGE_STYLE_BASE, "backgroundColor": "#0d6efd"}
+BADGE_RED = {**BADGE_STYLE_BASE, "backgroundColor": "#dc3545"}
+
+ALERT_BANNER_STYLE = {
+    "display": "block",
+    "backgroundColor": "#dc3545",
+    "color": "white",
+    "padding": "8px 16px",
+    "borderRadius": "4px",
+    "fontSize": "13px",
+    "fontFamily": "monospace",
+    "marginTop": "10px",
+    "textAlign": "center",
+}
+
 STRUCTURE_TYPE_OPTIONS = [
-    {"label": "Single", "value": "single"},
+    {"label": "Call", "value": "call"},
+    {"label": "Put", "value": "put"},
     {"label": "Put Spread", "value": "put_spread"},
     {"label": "Call Spread", "value": "call_spread"},
     {"label": "Risk Reversal", "value": "risk_reversal"},
     {"label": "Straddle", "value": "straddle"},
     {"label": "Strangle", "value": "strangle"},
     {"label": "Butterfly", "value": "butterfly"},
+    {"label": "Put Fly", "value": "put_fly"},
+    {"label": "Call Fly", "value": "call_fly"},
+    {"label": "Iron Butterfly", "value": "iron_butterfly"},
     {"label": "Iron Condor", "value": "iron_condor"},
+    {"label": "Put Condor", "value": "put_condor"},
+    {"label": "Call Condor", "value": "call_condor"},
     {"label": "Collar", "value": "collar"},
+    {"label": "Call Spread Collar", "value": "call_spread_collar"},
+    {"label": "Put Spread Collar", "value": "put_spread_collar"},
+    {"label": "Put Stupid", "value": "put_stupid"},
+    {"label": "Call Stupid", "value": "call_stupid"},
 ]
 
 # Empty leg row template
 _EMPTY_ROW = {
-    "leg": "", "expiry": "", "strike": "", "type": "", "side": "",
-    "qty": 1, "bid_size": "", "bid": "", "mid": "", "offer": "", "offer_size": "",
+    "leg": "", "expiry": "", "strike": "", "type": "",
+    "ratio": 1, "bid_size": "", "bid": "", "mid": "", "offer": "", "offer_size": "",
 }
 
 
@@ -82,12 +116,54 @@ _DEFAULT_HIDDEN = ["bid_size", "offer_size", "bought_sold"]
 # Layout components
 # ---------------------------------------------------------------------------
 
-def create_header():
+def create_header(initial_source="Mock Data"):
+    is_bloomberg = initial_source == "Bloomberg API"
+    badge_style = BADGE_GREEN if is_bloomberg else BADGE_BLUE
+
     return html.Div(
         className="header",
+        style={
+            "display": "flex",
+            "justifyContent": "space-between",
+            "alignItems": "center",
+        },
         children=[
-            html.H1("IDB Options Pricer"),
-            html.P("Equity Derivatives Structure Pricing Tool"),
+            html.Div([
+                html.H1("IDB Options Pricer"),
+                html.P("Equity Derivatives Structure Pricing Tool"),
+            ]),
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "10px"},
+                children=[
+                    html.Span(
+                        initial_source,
+                        id="data-source-badge",
+                        style=badge_style,
+                    ),
+                    html.Button(
+                        "Switch to Bloomberg" if not is_bloomberg else "Switch to Mock",
+                        id="toggle-data-source-btn",
+                        n_clicks=0,
+                        style={
+                            "padding": "4px 10px",
+                            "fontSize": "11px",
+                            "backgroundColor": "#333",
+                            "color": "#aaa",
+                            "border": "1px solid #555",
+                            "borderRadius": "4px",
+                            "cursor": "pointer",
+                        },
+                    ),
+                    html.Div(
+                        id="data-source-error",
+                        style={
+                            "color": "#ff4444",
+                            "fontSize": "12px",
+                            "fontFamily": "monospace",
+                        },
+                    ),
+                ],
+            ),
         ],
     )
 
@@ -203,10 +279,10 @@ def create_pricer_toolbar():
                 ),
             ]),
             html.Div([
-                html.Div("Qty", style=_LABEL_STYLE),
+                html.Div("Size", style=_LABEL_STYLE),
                 dcc.Input(
                     id="manual-quantity", type="number",
-                    placeholder="Qty", value=None,
+                    placeholder="Size", value=None,
                     style={**_INPUT_STYLE, "width": "80px"},
                 ),
             ]),
@@ -263,8 +339,7 @@ def create_pricing_table():
                     {"name": "Expiry", "id": "expiry", "editable": True},
                     {"name": "Strike", "id": "strike", "editable": True, "type": "numeric"},
                     {"name": "Type", "id": "type", "editable": True, "presentation": "dropdown"},
-                    {"name": "Side", "id": "side", "editable": True, "presentation": "dropdown"},
-                    {"name": "Qty", "id": "qty", "editable": True, "type": "numeric"},
+                    {"name": "Ratio", "id": "ratio", "editable": True, "type": "numeric"},
                     {"name": "Bid Size", "id": "bid_size", "editable": False},
                     {"name": "Bid", "id": "bid", "editable": False},
                     {"name": "Mid", "id": "mid", "editable": False},
@@ -277,12 +352,6 @@ def create_pricing_table():
                         "options": [
                             {"label": "Call", "value": "C"},
                             {"label": "Put", "value": "P"},
-                        ],
-                    },
-                    "side": {
-                        "options": [
-                            {"label": "Buy", "value": "B"},
-                            {"label": "Sell", "value": "S"},
                         ],
                     },
                 },
@@ -307,18 +376,35 @@ def create_pricing_table():
                 style_cell_conditional=[
                     # Input columns get a slightly lighter background
                     {
-                        "if": {"column_id": ["expiry", "strike", "type", "side", "qty"]},
+                        "if": {"column_id": ["expiry", "strike", "type", "ratio"]},
                         "backgroundColor": "#1c2a4a",
                     },
                     # Leg column narrower
                     {"if": {"column_id": "leg"}, "width": "70px"},
                     {"if": {"column_id": "expiry"}, "width": "80px"},
-                    {"if": {"column_id": "qty"}, "width": "50px"},
+                    {"if": {"column_id": "ratio"}, "width": "60px"},
                 ],
                 style_data_conditional=[
                     # Color-coded pricing columns
                     {"if": {"column_id": "bid"}, "color": "#00ff88"},
                     {"if": {"column_id": "offer"}, "color": "#ff6b6b"},
+                    # Signed ratio: positive (buy) green, negative (sell) red
+                    {
+                        "if": {
+                            "filter_query": "{ratio} > 0",
+                            "column_id": "ratio",
+                        },
+                        "color": "#00ff88",
+                        "fontWeight": "bold",
+                    },
+                    {
+                        "if": {
+                            "filter_query": "{ratio} < 0",
+                            "column_id": "ratio",
+                        },
+                        "color": "#ff4444",
+                        "fontWeight": "bold",
+                    },
                     # Structure summary row (last — overrides column colors)
                     {
                         "if": {"filter_query": '{leg} = "Structure"'},
@@ -327,6 +413,12 @@ def create_pricing_table():
                         "borderTop": "2px solid #00d4ff",
                         "color": "#00d4ff",
                     },
+                    # Failed quote indicator (greyed italic --)
+                    {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{bid_size} = "--"', "column_id": "bid_size"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{offer_size} = "--"', "column_id": "offer_size"}, "color": "#666", "fontStyle": "italic"},
                 ],
             ),
             # Action row below table
@@ -350,6 +442,16 @@ def create_pricing_table():
                     ),
                     html.Button(
                         "- Row", id="remove-row-btn", n_clicks=0,
+                        style={
+                            "padding": "4px 14px", "fontSize": "12px",
+                            "backgroundColor": "#333", "color": "#aaa",
+                            "border": "1px solid #555", "borderRadius": "4px",
+                            "cursor": "pointer",
+                        },
+                    ),
+                    html.Button(
+                        "Flip", id="flip-btn", n_clicks=0,
+                        title="Invert all ratios and flip delta",
                         style={
                             "padding": "4px 14px", "fontSize": "12px",
                             "backgroundColor": "#333", "color": "#aaa",
@@ -431,7 +533,7 @@ def create_order_input_section():
     )
 
 
-def create_order_blotter(initial_data=None):
+def create_order_blotter(initial_data=None, show_recall_hint=True):
     """Order blotter table — library of all priced structures."""
     visible_cols = [c for c in _BLOTTER_COLUMNS if c["id"] in _DEFAULT_VISIBLE]
 
@@ -467,7 +569,9 @@ def create_order_blotter(initial_data=None):
                 ],
             ),
             html.P(
-                "Click a row to recall into pricer. Edit cells directly to update order status.",
+                "Click a row to recall into pricer. Edit cells directly to update order status."
+                if show_recall_hint
+                else "Edit cells directly to update order status. Changes sync across dashboards.",
                 style={"color": "#666", "fontSize": "11px", "margin": "0 0 6px 0"},
             ),
             # Column toggle panel (hidden by default)
@@ -616,13 +720,17 @@ def create_order_blotter(initial_data=None):
                         "backgroundColor": "#1a3a5e",
                         "border": "1px solid #00d4ff",
                     },
+                    # Failed quote indicator (greyed italic --)
+                    {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
+                    {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
                 ],
             ),
         ],
     )
 
 
-def create_layout():
+def create_layout(data_source="Mock Data"):
     """Build the full dashboard layout.
 
     Called by Dash on each page load (app.layout = create_layout) so that
@@ -630,10 +738,8 @@ def create_layout():
     """
     # Load persisted orders from JSON
     orders = load_orders()
-    blotter_data = [
-        {k: v for k, v in o.items() if not k.startswith("_")}
-        for o in orders
-    ]
+    current_mtime = get_orders_mtime()
+    blotter_data = orders_to_display(orders)
 
     return html.Div(
         style={
@@ -653,7 +759,17 @@ def create_layout():
             dcc.Store(id="suppress-template", data=False),
             dcc.Store(id="auto-price-suppress", data=False),
             dcc.Store(id="blotter-edit-suppress", data=False),
-            create_header(),
+            # Polling infrastructure for cross-dashboard sync
+            dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
+            dcc.Store(id="file-mtime", data=current_mtime),
+            dcc.Store(id="last-write-time", data=current_mtime),
+            # Live price refresh (1-second cadence)
+            dcc.Interval(id="live-refresh-interval", interval=1000, n_intervals=0),
+            # Data source tracking
+            dcc.Store(id="data-source", data=data_source),
+            dcc.Store(id="bloomberg-health", data="ok"),
+            create_header(initial_source=data_source),
+            html.Div(id="bloomberg-health-alert", style={"display": "none"}),
             html.Hr(style={"borderColor": "#333"}),
             create_order_input(),
             # Toolbar + table grouped as one card
@@ -674,5 +790,50 @@ def create_layout():
             create_order_input_section(),
             html.Hr(style={"borderColor": "#333", "marginTop": "20px"}),
             create_order_blotter(initial_data=blotter_data),
+        ],
+    )
+
+
+def create_blotter_layout():
+    """Build a blotter-only layout for the standalone blotter dashboard.
+
+    Shows only the order blotter with editable cells, column toggle,
+    and polling infrastructure for cross-dashboard sync. No pricer,
+    no parser, no recall.
+    """
+    orders = load_orders()
+    current_mtime = get_orders_mtime()
+    blotter_data = orders_to_display(orders)
+
+    return html.Div(
+        style={
+            "fontFamily": "'Segoe UI', Tahoma, sans-serif",
+            "backgroundColor": "#0f0f23",
+            "color": "#e0e0e0",
+            "minHeight": "100vh",
+            "padding": "20px 20px 80px 20px",
+            "maxWidth": "1400px",
+            "margin": "0 auto",
+            "boxSizing": "border-box",
+        },
+        children=[
+            # Session data stores
+            dcc.Store(id="order-store", data=orders),
+            dcc.Store(id="blotter-edit-suppress", data=False),
+            # Polling infrastructure for cross-dashboard sync
+            dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
+            dcc.Store(id="file-mtime", data=current_mtime),
+            dcc.Store(id="last-write-time", data=current_mtime),
+            # Header
+            html.Div(children=[
+                html.H1("Order Blotter", style={"margin": "0"}),
+                html.P(
+                    "Shared blotter \u2014 edits sync with the pricer dashboard",
+                    style={"color": "#666", "fontSize": "12px", "margin": "4px 0 0 0"},
+                ),
+            ]),
+            html.Hr(style={"borderColor": "#333"}),
+            # Blotter
+            create_order_blotter(initial_data=blotter_data, show_recall_hint=False),
         ],
     )

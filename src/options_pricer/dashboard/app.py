@@ -1,12 +1,15 @@
 """Dash web app entry point for the IDB options pricer dashboard."""
 
+import logging
 import re
 import uuid
 from datetime import date, datetime
 
+logger = logging.getLogger(__name__)
+
 from dash import Dash, Input, Output, State, callback, ctx, html, no_update
 
-from ..bloomberg import create_client
+from ..bloomberg import BloombergClient, MockBloombergClient, create_client
 from ..models import (
     LegMarketData,
     OptionLeg,
@@ -16,12 +19,15 @@ from ..models import (
     QuoteSide,
     Side,
 )
-from ..order_store import add_order as store_add_order
-from ..order_store import save_orders as store_save_orders
+from ..order_store import get_orders_mtime, orders_to_display, save_orders_locked
 from ..parser import parse_expiry, parse_order
 from ..structure_pricer import price_structure_from_market
+from .callbacks import recalc_pnl, register_blotter_callbacks
 from .layouts import (
-    _BLOTTER_COLUMNS,
+    ALERT_BANNER_STYLE,
+    BADGE_BLUE,
+    BADGE_GREEN,
+    BADGE_RED,
     _EMPTY_ROW,
     _make_empty_rows,
     create_layout,
@@ -29,7 +35,7 @@ from .layouts import (
 
 app = Dash(__name__, suppress_callback_exceptions=True)
 app.title = "IDB Options Pricer"
-app.layout = create_layout  # callable — Dash invokes per page load
+app.layout = lambda: create_layout(data_source=_client.source_name)
 
 # Clientside callback: Enter key in textarea triggers pricing
 app.clientside_callback(
@@ -56,6 +62,49 @@ app.clientside_callback(
 
 # Try live Bloomberg first, fall back to mock
 _client = create_client(use_mock=False)
+
+# ---------------------------------------------------------------------------
+# Callback: toggle data source (Bloomberg / Mock)
+# ---------------------------------------------------------------------------
+
+_HIDDEN_ALERT = {"display": "none"}
+
+@callback(
+    Output("data-source-badge", "children"),
+    Output("data-source-badge", "style"),
+    Output("toggle-data-source-btn", "children"),
+    Output("data-source-error", "children"),
+    Output("data-source", "data"),
+    Output("bloomberg-health-alert", "style", allow_duplicate=True),
+    Output("bloomberg-health-alert", "children", allow_duplicate=True),
+    Output("bloomberg-health", "data", allow_duplicate=True),
+    Input("toggle-data-source-btn", "n_clicks"),
+    State("data-source", "data"),
+    prevent_initial_call=True,
+)
+def toggle_data_source(n_clicks, current_source):
+    global _client
+
+    if current_source == "Mock Data":
+        # Try switching to Bloomberg
+        new_client = BloombergClient()
+        if new_client.connect():
+            _client = new_client
+            return ("Bloomberg API", BADGE_GREEN, "Switch to Mock", "",
+                    "Bloomberg API", _HIDDEN_ALERT, "", "ok")
+        else:
+            return (
+                "Mock Data", BADGE_BLUE, "Switch to Bloomberg",
+                "Bloomberg API connection failed. Check Terminal is running.",
+                "Mock Data", _HIDDEN_ALERT, "", "ok",
+            )
+    else:
+        # Switch to Mock
+        _client.disconnect()
+        _client = MockBloombergClient()
+        return ("Mock Data", BADGE_BLUE, "Switch to Bloomberg", "",
+                "Mock Data", _HIDDEN_ALERT, "", "ok")
+
 
 # ---------------------------------------------------------------------------
 # Reusable style constants
@@ -91,47 +140,93 @@ _ORDER_INPUT_VISIBLE_STYLE = {
 
 # Structure templates for pre-populating table rows.
 STRUCTURE_TEMPLATES = {
-    "single": [{"type": "C", "side": "B"}],
+    "call": [{"type": "C", "ratio": 1}],
+    "put": [{"type": "P", "ratio": 1}],
     "put_spread": [
-        {"type": "P", "side": "S"},
-        {"type": "P", "side": "B"},
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": -1},
     ],
     "call_spread": [
-        {"type": "C", "side": "B"},
-        {"type": "C", "side": "S"},
+        {"type": "C", "ratio": 1},
+        {"type": "C", "ratio": -1},
     ],
     "risk_reversal": [
-        {"type": "P", "side": "S"},
-        {"type": "C", "side": "B"},
+        {"type": "P", "ratio": -1},
+        {"type": "C", "ratio": 1},
     ],
     "straddle": [
-        {"type": "C", "side": "B"},
-        {"type": "P", "side": "B"},
+        {"type": "C", "ratio": 1},
+        {"type": "P", "ratio": 1},
     ],
     "strangle": [
-        {"type": "P", "side": "B"},
-        {"type": "C", "side": "B"},
+        {"type": "P", "ratio": 1},
+        {"type": "C", "ratio": 1},
     ],
     "butterfly": [
-        {"type": "C", "side": "B"},
-        {"type": "C", "side": "S", "qty": 2},
-        {"type": "C", "side": "B"},
+        {"type": "C", "ratio": 1},
+        {"type": "C", "ratio": -2},
+        {"type": "C", "ratio": 1},
+    ],
+    "put_fly": [
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": -2},
+        {"type": "P", "ratio": 1},
+    ],
+    "call_fly": [
+        {"type": "C", "ratio": 1},
+        {"type": "C", "ratio": -2},
+        {"type": "C", "ratio": 1},
+    ],
+    "iron_butterfly": [
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": -1},
+        {"type": "C", "ratio": -1},
+        {"type": "C", "ratio": 1},
     ],
     "iron_condor": [
-        {"type": "P", "side": "B"},
-        {"type": "P", "side": "S"},
-        {"type": "C", "side": "S"},
-        {"type": "C", "side": "B"},
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": -1},
+        {"type": "C", "ratio": -1},
+        {"type": "C", "ratio": 1},
+    ],
+    "put_condor": [
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": -1},
+        {"type": "P", "ratio": -1},
+        {"type": "P", "ratio": 1},
+    ],
+    "call_condor": [
+        {"type": "C", "ratio": 1},
+        {"type": "C", "ratio": -1},
+        {"type": "C", "ratio": -1},
+        {"type": "C", "ratio": 1},
     ],
     "collar": [
-        {"type": "P", "side": "B"},
-        {"type": "C", "side": "S"},
+        {"type": "P", "ratio": 1},
+        {"type": "C", "ratio": -1},
+    ],
+    "call_spread_collar": [
+        {"type": "P", "ratio": 1},
+        {"type": "C", "ratio": -1},
+        {"type": "C", "ratio": 1},
+    ],
+    "put_spread_collar": [
+        {"type": "P", "ratio": -1},
+        {"type": "P", "ratio": 1},
+        {"type": "C", "ratio": -1},
+    ],
+    "put_stupid": [
+        {"type": "P", "ratio": 1},
+        {"type": "P", "ratio": 1},
+    ],
+    "call_stupid": [
+        {"type": "C", "ratio": 1},
+        {"type": "C", "ratio": 1},
     ],
 }
 
 # Map short codes to model enums
 _TYPE_MAP = {"C": OptionType.CALL, "P": OptionType.PUT}
-_SIDE_MAP = {"B": Side.BUY, "S": Side.SELL}
 
 # Error tail for price_order (outputs 3-17 when pricing fails)
 _PRICE_ORDER_ERR_TAIL = (
@@ -185,40 +280,65 @@ def _build_table_data(order, leg_market, struct_data):
 
     for i, (leg, mkt) in enumerate(zip(order.structure.legs, leg_market)):
         type_code = "C" if leg.option_type == OptionType.CALL else "P"
-        side_code = "B" if leg.side == Side.BUY else "S"
         exp_str = leg.expiry.strftime("%b%y") if leg.expiry else ""
         ratio = leg.quantity // base_qty
+        signed_ratio = ratio if leg.side == Side.BUY else -ratio
 
-        mid = (mkt.bid + mkt.offer) / 2.0 if mkt.bid > 0 and mkt.offer > 0 else 0.0
+        both_failed = (mkt.bid == 0 and mkt.offer == 0)
+        bid_str = "--" if mkt.bid == 0 else f"{mkt.bid:.2f}"
+        offer_str = "--" if mkt.offer == 0 else f"{mkt.offer:.2f}"
+        if mkt.bid > 0 and mkt.offer > 0:
+            mid_str = f"{(mkt.bid + mkt.offer) / 2.0:.2f}"
+        elif both_failed:
+            mid_str = "--"
+        else:
+            mid_str = bid_str if mkt.bid > 0 else offer_str
+
         rows.append({
             "leg": f"Leg {i + 1}",
             "expiry": exp_str,
             "strike": leg.strike,
             "type": type_code,
-            "side": side_code,
-            "qty": ratio,
-            "bid_size": str(mkt.bid_size),
-            "bid": f"{mkt.bid:.2f}",
-            "mid": f"{mid:.2f}",
-            "offer": f"{mkt.offer:.2f}",
-            "offer_size": str(mkt.offer_size),
+            "ratio": signed_ratio,
+            "bid_size": "--" if both_failed else str(mkt.bid_size),
+            "bid": bid_str,
+            "mid": mid_str,
+            "offer": offer_str,
+            "offer_size": "--" if both_failed else str(mkt.offer_size),
         })
 
-    # Structure summary row
-    rows.append({
-        "leg": "Structure",
-        "expiry": "", "strike": "", "type": "", "side": "", "qty": "",
-        "bid_size": str(struct_data.structure_bid_size),
-        "bid": f"{abs(struct_data.structure_bid):.2f}",
-        "mid": f"{abs(struct_data.structure_mid):.2f}",
-        "offer": f"{abs(struct_data.structure_offer):.2f}",
-        "offer_size": str(struct_data.structure_offer_size),
-    })
+    # Check if any leg has a completely failed quote
+    any_leg_failed = any(
+        m.bid == 0 and m.offer == 0 for m in leg_market
+    )
+
+    if any_leg_failed:
+        # Structure price from partial data is unreliable
+        rows.append({
+            "leg": "Structure",
+            "expiry": "", "strike": "", "type": "", "ratio": "",
+            "bid_size": "--", "bid": "--", "mid": "--", "offer": "--", "offer_size": "--",
+        })
+    else:
+        # Structure summary row — display absolute values, bid <= offer
+        disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+        disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+        disp_mid = (disp_bid + disp_offer) / 2.0
+
+        rows.append({
+            "leg": "Structure",
+            "expiry": "", "strike": "", "type": "", "ratio": "",
+            "bid_size": str(struct_data.structure_bid_size),
+            "bid": f"{disp_bid:.2f}",
+            "mid": f"{disp_mid:.2f}",
+            "offer": f"{disp_offer:.2f}",
+            "offer_size": str(struct_data.structure_offer_size),
+        })
 
     return rows
 
 
-def _build_header_and_extras(order, spot, struct_data, multiplier):
+def _build_header_and_extras(order, spot, struct_data, multiplier, leg_market=None):
     """Build order header, broker quote, current-structure store, order input style."""
     header_items = []
     structure_name = order.structure.name.upper()
@@ -236,9 +356,25 @@ def _build_header_and_extras(order, spot, struct_data, multiplier):
     elif order.delta < 0:
         header_items.append(html.Span(f"Delta: {order.delta:.0f}"))
 
+    # Check if any leg has a completely failed quote
+    any_leg_failed = (
+        leg_market is not None
+        and any(m.bid == 0 and m.offer == 0 for m in leg_market)
+    )
+
+    if any_leg_failed:
+        disp_bid = None
+        disp_mid = None
+        disp_offer = None
+    else:
+        # Compute display-safe absolute prices with bid <= offer
+        disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+        disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+        disp_mid = (disp_bid + disp_offer) / 2.0
+
     broker_style = _HIDDEN
     broker_content = []
-    if order.price > 0:
+    if order.price > 0 and disp_mid is not None:
         side_label = order.quote_side.value.upper()
         broker_content = [
             html.Span(
@@ -246,11 +382,11 @@ def _build_header_and_extras(order, spot, struct_data, multiplier):
                 style={"fontSize": "16px", "marginRight": "30px"},
             ),
             html.Span(
-                f"Screen Mid: {abs(struct_data.structure_mid):.2f}",
+                f"Screen Mid: {disp_mid:.2f}",
                 style={"fontSize": "16px", "marginRight": "30px"},
             ),
         ]
-        edge = order.price - abs(struct_data.structure_mid)
+        edge = order.price - disp_mid
         edge_color = "#00ff88" if edge > 0 else "#ff4444"
         broker_content.append(
             html.Span(
@@ -258,6 +394,19 @@ def _build_header_and_extras(order, spot, struct_data, multiplier):
                 style={"fontSize": "16px", "color": edge_color, "fontWeight": "bold"},
             )
         )
+        broker_style = _BROKER_VISIBLE_STYLE
+    elif order.price > 0 and disp_mid is None:
+        side_label = order.quote_side.value.upper()
+        broker_content = [
+            html.Span(
+                f"Broker: {order.price:.2f} {side_label}",
+                style={"fontSize": "16px", "marginRight": "30px"},
+            ),
+            html.Span(
+                "Screen Mid: --",
+                style={"fontSize": "16px", "marginRight": "30px", "color": "#666", "fontStyle": "italic"},
+            ),
+        ]
         broker_style = _BROKER_VISIBLE_STYLE
 
     leg_details = []
@@ -271,11 +420,11 @@ def _build_header_and_extras(order, spot, struct_data, multiplier):
         "underlying": order.underlying,
         "structure_name": structure_name,
         "structure_detail": structure_detail,
-        "bid": abs(struct_data.structure_bid),
-        "mid": abs(struct_data.structure_mid),
-        "offer": abs(struct_data.structure_offer),
-        "bid_size": struct_data.structure_bid_size,
-        "offer_size": struct_data.structure_offer_size,
+        "bid": disp_bid,
+        "mid": disp_mid,
+        "offer": disp_offer,
+        "bid_size": struct_data.structure_bid_size if not any_leg_failed else None,
+        "offer_size": struct_data.structure_offer_size if not any_leg_failed else None,
         "multiplier": multiplier,
     }
 
@@ -306,14 +455,22 @@ def _build_legs_from_table(table_data, underlying, order_qty):
         expiry_str = str(row.get("expiry", "")).strip()
         strike_val = row.get("strike")
         type_val = str(row.get("type", "")).strip()
-        side_val = str(row.get("side", "")).strip()
-        qty_val = row.get("qty")
+        # Support both new "ratio" format and old "side"+"qty" format
+        ratio_val = row.get("ratio")
+        if ratio_val is None and "side" in row:
+            side_code = str(row.get("side", "")).strip()
+            qty = int(row.get("qty", 1) or 1)
+            if side_code == "B":
+                ratio_val = qty
+            elif side_code == "S":
+                ratio_val = -qty
 
-        row_has_data = bool(expiry_str or strike_val or type_val or side_val)
+        row_has_data = bool(expiry_str or strike_val or type_val or ratio_val)
         if not row_has_data:
             continue
 
-        if not expiry_str or not strike_val or type_val not in ("C", "P") or side_val not in ("B", "S"):
+        ratio = int(ratio_val) if ratio_val else 0
+        if not expiry_str or not strike_val or type_val not in ("C", "P") or ratio == 0:
             return None, None  # Incomplete row — caller decides how to handle
 
         try:
@@ -321,13 +478,14 @@ def _build_legs_from_table(table_data, underlying, order_qty):
         except ValueError as e:
             return None, f"Leg {i + 1}: {e}"
 
-        qty = int(qty_val) if qty_val else 1
+        side = Side.BUY if ratio > 0 else Side.SELL
+        qty = abs(ratio)
         legs.append(OptionLeg(
             underlying=underlying,
             expiry=expiry,
             strike=float(strike_val),
             option_type=_TYPE_MAP[type_val],
-            side=_SIDE_MAP[side_val],
+            side=side,
             quantity=qty * order_qty,
             ratio=qty,
         ))
@@ -373,7 +531,7 @@ def price_order(n_clicks, order_text):
     spot, leg_market, struct_data, multiplier = _fetch_and_price(order)
     table_data = _build_table_data(order, leg_market, struct_data)
     header_style, header_items, broker_style, broker_content, current_data, order_input_style = (
-        _build_header_and_extras(order, spot, struct_data, multiplier)
+        _build_header_and_extras(order, spot, struct_data, multiplier, leg_market)
     )
 
     struct_name = order.structure.name.lower().replace(" ", "_")
@@ -426,8 +584,7 @@ def populate_table_template(structure_type, suppress):
             **_EMPTY_ROW,
             "leg": f"Leg {i + 1}",
             "type": t["type"],
-            "side": t["side"],
-            "qty": t.get("qty", 1),
+            "ratio": t.get("ratio", 1),
         })
     return rows, False, True
 
@@ -455,6 +612,33 @@ def toggle_table_rows(add_clicks, remove_clicks, current_data):
         rows.pop()
 
     return rows, True
+
+
+# ---------------------------------------------------------------------------
+# Callback: flip structure (invert ratios + delta)
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("pricing-display", "data", allow_duplicate=True),
+    Output("manual-delta", "value", allow_duplicate=True),
+    Output("auto-price-suppress", "data", allow_duplicate=True),
+    Input("flip-btn", "n_clicks"),
+    State("pricing-display", "data"),
+    State("manual-delta", "value"),
+    prevent_initial_call=True,
+)
+def flip_structure(n_clicks, table_data, current_delta):
+    """Invert all signed ratios and flip the delta sign."""
+    new_rows = []
+    for row in (table_data or []):
+        if row.get("leg", "").startswith("Leg"):
+            ratio = row.get("ratio")
+            if ratio is not None and ratio != "" and ratio != 0:
+                row = {**row, "ratio": -int(ratio)}
+        new_rows.append(row)
+
+    new_delta = -current_delta if current_delta else None
+    return new_rows, new_delta, False
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +672,8 @@ def auto_price_from_table(data_ts, underlying, suppress,
                           delta, broker_price, quote_side_val, order_qty):
     noop = ("",) + (no_update,) * 7 + (False,)
 
+    # Suppress prevents self-loop: callback outputs table → data_timestamp
+    # fires → callback runs again → suppress=True → returns noop
     if suppress:
         return noop
 
@@ -523,8 +709,9 @@ def auto_price_from_table(data_ts, underlying, suppress,
         return (f"Pricing error: {e}",) + (no_update,) * 7 + (False,)
 
     new_table = _build_table_data(order, leg_market, struct_data)
+
     header_style, header_items, broker_style, broker_content, current_data, order_input_style = (
-        _build_header_and_extras(order, spot, struct_data, multiplier)
+        _build_header_and_extras(order, spot, struct_data, multiplier, leg_market)
     )
 
     return (
@@ -538,6 +725,130 @@ def auto_price_from_table(data_ts, underlying, suppress,
         order_input_style,  # order-input-section style
         True,               # auto-price-suppress (prevent self-loop)
     )
+
+
+# ---------------------------------------------------------------------------
+# Callback: live-refresh header + broker quote (interval-driven, NO table update)
+# ---------------------------------------------------------------------------
+
+@callback(
+    Output("order-header-content", "children", allow_duplicate=True),
+    Output("broker-quote-content", "children", allow_duplicate=True),
+    Output("bloomberg-health-alert", "style", allow_duplicate=True),
+    Output("bloomberg-health-alert", "children", allow_duplicate=True),
+    Output("data-source-badge", "style", allow_duplicate=True),
+    Output("data-source-badge", "children", allow_duplicate=True),
+    Output("bloomberg-health", "data", allow_duplicate=True),
+    Input("live-refresh-interval", "n_intervals"),
+    State("current-structure", "data"),
+    State("manual-underlying", "value"),
+    State("manual-stock-ref", "value"),
+    State("manual-delta", "value"),
+    State("manual-broker-price", "value"),
+    State("manual-quote-side", "value"),
+    State("data-source", "data"),
+    prevent_initial_call=True,
+)
+def refresh_live_display(n_intervals, current_data, underlying,
+                         stock_ref, delta, broker_price, quote_side_val,
+                         data_source):
+    """Update header bar (live stock price), broker edge, and Bloomberg health every tick.
+
+    Never touches pricing-display.data or any editable field — only
+    updates display-only HTML components that have no editing state.
+    """
+    is_bloomberg = (data_source == "Bloomberg API")
+
+    # Default health outputs: no alert, keep current badge
+    alert_style = _HIDDEN_ALERT
+    alert_text = ""
+    badge_style = no_update
+    badge_text = no_update
+    health = "ok"
+
+    if not current_data or not underlying or not underlying.strip():
+        # Even without a structure, check Bloomberg health if we have an underlying
+        if is_bloomberg and underlying and underlying.strip():
+            raw_spot = _client.get_spot(underlying.strip().upper())
+            if raw_spot is None:
+                alert_style = ALERT_BANNER_STYLE
+                alert_text = "Bloomberg API is not responding. Market data may be unavailable."
+                badge_style = BADGE_RED
+                badge_text = "Bloomberg API"
+                health = "failing"
+            else:
+                badge_style = BADGE_GREEN
+                badge_text = "Bloomberg API"
+        return (no_update, no_update,
+                alert_style, alert_text, badge_style, badge_text, health)
+
+    underlying = underlying.strip().upper()
+    raw_spot = _client.get_spot(underlying)
+    spot = raw_spot or 0.0
+
+    # Bloomberg health detection
+    if is_bloomberg and raw_spot is None:
+        alert_style = ALERT_BANNER_STYLE
+        alert_text = "Bloomberg API is not responding. Market data may be unavailable."
+        badge_style = BADGE_RED
+        badge_text = "Bloomberg API"
+        health = "failing"
+    elif is_bloomberg:
+        badge_style = BADGE_GREEN
+        badge_text = "Bloomberg API"
+
+    # --- Rebuild header with live spot price ---
+    structure_name = current_data.get("structure_name", "")
+    header_items = [
+        html.Span(
+            f"{underlying} {structure_name}",
+            style={"color": "#00d4ff", "fontWeight": "bold", "fontSize": "17px"},
+        ),
+    ]
+    if stock_ref:
+        header_items.append(html.Span(f"Tie: ${float(stock_ref):.2f}"))
+    header_items.append(html.Span(f"Stock: ${spot:.2f}"))
+    if delta:
+        d = float(delta)
+        if d > 0:
+            header_items.append(html.Span(f"Delta: +{d:.0f}"))
+        elif d < 0:
+            header_items.append(html.Span(f"Delta: {d:.0f}"))
+
+    # --- Rebuild broker edge using stored mid from last price calculation ---
+    broker_content = no_update
+    mid = current_data.get("mid")
+    if broker_price and mid is not None:
+        try:
+            bp = float(broker_price)
+            mid_f = float(mid)
+            if bp > 0 and mid_f > 0:
+                side_label = quote_side_val.upper() if quote_side_val else "BID"
+                edge = bp - mid_f
+                edge_color = "#00ff88" if edge > 0 else "#ff4444"
+                broker_content = [
+                    html.Span(
+                        f"Broker: {bp:.2f} {side_label}",
+                        style={"fontSize": "16px", "marginRight": "30px"},
+                    ),
+                    html.Span(
+                        f"Screen Mid: {mid_f:.2f}",
+                        style={"fontSize": "16px", "marginRight": "30px"},
+                    ),
+                    html.Span(
+                        f"Edge: {edge:+.2f}",
+                        style={
+                            "fontSize": "16px",
+                            "color": edge_color,
+                            "fontWeight": "bold",
+                        },
+                    ),
+                ]
+        except (ValueError, TypeError):
+            logger.exception("Failed to build broker quote display")
+
+    return (header_items, broker_content,
+            alert_style, alert_text, badge_style, badge_text, health)
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +911,7 @@ def clear_all(n_clicks):
     Output("order-side", "value"),
     Output("order-size", "value"),
     Output("blotter-edit-suppress", "data"),
+    Output("last-write-time", "data"),
     Input("add-order-btn", "n_clicks"),
     State("current-structure", "data"),
     State("order-store", "data"),
@@ -618,24 +930,30 @@ def add_order(n_clicks, current_data, existing_orders,
               table_data, toolbar_underlying, toolbar_struct, toolbar_ref,
               toolbar_delta, toolbar_broker_px, toolbar_quote_side, toolbar_qty):
     if not current_data:
-        return no_update, no_update, "Price a structure first.", no_update, no_update, no_update
+        return no_update, no_update, "Price a structure first.", no_update, no_update, no_update, no_update
 
     # Map toolbar side to blotter side
     side_map = {"bid": "Bid", "offer": "Offered"}
     blotter_side = side_map.get(toolbar_quote_side, "")
     size_str = str(int(toolbar_qty)) if toolbar_qty else ""
-    mid = current_data["mid"]
+
+    # Handle failed quotes (None values in current_data)
+    bid_val = current_data.get("bid")
+    mid_val = current_data.get("mid")
+    offer_val = current_data.get("offer")
+    bid_size_val = current_data.get("bid_size")
+    offer_size_val = current_data.get("offer_size")
 
     order_record = {
         "id": str(uuid.uuid4()),
         "added_time": datetime.now().strftime("%H:%M"),
         "underlying": current_data["underlying"],
         "structure": f"{current_data['structure_name']} {current_data['structure_detail']}",
-        "bid_size": str(current_data["bid_size"]),
-        "bid": f"{current_data['bid']:.2f}",
-        "mid": f"{mid:.2f}",
-        "offer": f"{current_data['offer']:.2f}",
-        "offer_size": str(current_data["offer_size"]),
+        "bid_size": "--" if bid_size_val is None else str(bid_size_val),
+        "bid": "--" if bid_val is None else f"{bid_val:.2f}",
+        "mid": "--" if mid_val is None else f"{mid_val:.2f}",
+        "offer": "--" if offer_val is None else f"{offer_val:.2f}",
+        "offer_size": "--" if offer_size_val is None else str(offer_size_val),
         "side": blotter_side,
         "size": size_str,
         "traded": "No",
@@ -659,128 +977,191 @@ def add_order(n_clicks, current_data, existing_orders,
     orders = existing_orders or []
     orders.append(order_record)
 
-    # Persist to JSON
-    store_save_orders(orders)
+    # Persist to JSON (with cross-process lock)
+    save_orders_locked(orders)
+    new_mtime = get_orders_mtime()
 
     # Build display rows (strip underscore fields)
-    blotter_rows = [
-        {k: v for k, v in o.items() if not k.startswith("_")}
-        for o in orders
-    ]
+    blotter_rows = orders_to_display(orders)
 
-    return blotter_rows, orders, "", None, None, True
+    return blotter_rows, orders, "", None, None, True, new_mtime
 
 
 # ---------------------------------------------------------------------------
-# Callback: sync blotter edits (editable cells) + PnL auto-calc
+# Shared blotter callbacks (poll, sync edits, column toggle, column visibility)
+# ---------------------------------------------------------------------------
+register_blotter_callbacks()
+
+
+# ---------------------------------------------------------------------------
+# Callback: live-refresh blotter order prices
 # ---------------------------------------------------------------------------
 
 @callback(
     Output("order-store", "data", allow_duplicate=True),
-    Output("blotter-table", "data", allow_duplicate=True),
-    Output("blotter-edit-suppress", "data", allow_duplicate=True),
-    Input("blotter-table", "data_timestamp"),
-    State("blotter-table", "data"),
+    Input("live-refresh-interval", "n_intervals"),
     State("order-store", "data"),
-    State("blotter-edit-suppress", "data"),
+    State("blotter-table", "data"),
     prevent_initial_call=True,
 )
-def sync_blotter_edits(data_ts, blotter_data, orders, suppress):
-    if suppress:
-        return no_update, no_update, False
+def refresh_blotter_prices(n_intervals, orders, blotter_data):
+    """Re-price every blotter order from live market data each tick.
 
-    if not blotter_data or not orders:
-        return no_update, no_update, False
+    Updates the client-side order store only.  Does NOT write to the JSON
+    file or update blotter-table.data — both of those would reset DataTable
+    editing state or trigger the poll callback to do a full table replace.
+    The blotter table displays the prices from when the order was added;
+    recalling an order into the pricer always fetches live prices.
+    """
+    if not orders:
+        return no_update
 
-    # Build lookup by id
-    order_map = {o["id"]: o for o in orders if "id" in o}
+    # Merge pending manual edits from the blotter display so they aren't
+    # lost when the store is written back.
+    _MANUAL_FIELDS = ("side", "size", "traded", "bought_sold", "traded_price", "initiator")
+    blotter_by_id = {r["id"]: r for r in (blotter_data or []) if "id" in r}
+    for order in orders:
+        row = blotter_by_id.get(order.get("id"))
+        if row:
+            for f in _MANUAL_FIELDS:
+                if f in row:
+                    order[f] = row[f]
 
-    changed = False
-    editable_fields = ("side", "size", "traded", "bought_sold", "traded_price", "initiator")
+    # Phase 1: scan orders, build legs, collect unique tickers for batch fetch
+    order_legs = {}  # id → (legs, ParsedOrder)
+    unique_underlyings = set()
+    unique_options = set()  # (underlying, expiry, strike, opt_type_str)
 
-    for row in blotter_data:
-        order_id = row.get("id")
-        if not order_id or order_id not in order_map:
+    for order in orders:
+        table_data = order.get("_table_data")
+        underlying = order.get("_underlying")
+        if not table_data or not underlying:
             continue
 
-        stored = order_map[order_id]
+        legs, err = _build_legs_from_table(table_data, underlying.strip().upper(), 1)
+        if not legs:
+            continue
 
-        # Sync editable fields from blotter back to store
-        for field in editable_fields:
-            new_val = row.get(field)
-            if new_val != stored.get(field):
-                stored[field] = new_val
-                changed = True
+        struct_name = (order.get("_structure_type") or "custom").replace("_", " ")
+        try:
+            parsed = ParsedOrder(
+                underlying=underlying.strip().upper(),
+                structure=OptionStructure(name=struct_name, legs=legs),
+                stock_ref=float(order.get("_stock_ref") or 0),
+                delta=float(order.get("_delta") or 0),
+                price=float(order.get("_broker_price") or 0),
+                quote_side=QuoteSide(order.get("_quote_side", "bid")),
+                quantity=1,
+                raw_text="",
+            )
+        except (ValueError, TypeError):
+            logger.exception("Blotter reprice: failed to build ParsedOrder for order %s", order.get("id"))
+            continue
 
-        # PnL only relevant for traded orders
-        if (stored.get("traded") == "Yes"
-                and stored.get("traded_price") not in (None, "")
-                and stored.get("bought_sold") in ("Bought", "Sold")):
-            try:
-                mid = float(stored.get("mid", 0))
-                tp = float(stored["traded_price"])
-                sz = int(stored.get("size", 0))
-                mult = stored.get("multiplier", 100)
-                if stored["bought_sold"] == "Bought":
-                    pnl = (mid - tp) * sz * mult
-                else:
-                    pnl = (tp - mid) * sz * mult
-                pnl_str = f"{pnl:+,.0f}"
-            except (ValueError, TypeError):
-                pnl_str = ""
-            if stored.get("pnl") != pnl_str:
-                stored["pnl"] = pnl_str
-                changed = True
-        elif stored.get("traded") != "Yes" and stored.get("pnl") not in (None, ""):
-            stored["pnl"] = ""
-            changed = True
+        order_legs[order["id"]] = (legs, parsed)
+        unique_underlyings.add(parsed.underlying)
+        for leg in legs:
+            unique_options.add(
+                (leg.underlying, leg.expiry, leg.strike, leg.option_type.value)
+            )
+
+    if not order_legs:
+        return no_update
+
+    # Batch fetch: each unique spot / quote / multiplier fetched once
+    spot_cache = {}
+    multiplier_cache = {}
+    quote_cache = {}
+
+    try:
+        for ul in unique_underlyings:
+            spot_cache[ul] = _client.get_spot(ul) or 0.0
+            multiplier_cache[ul] = _client.get_contract_multiplier(ul)
+
+        for key in unique_options:
+            q = _client.get_option_quote(*key)
+            quote_cache[key] = LegMarketData(
+                bid=q.bid, bid_size=q.bid_size, offer=q.offer, offer_size=q.offer_size,
+            )
+    except Exception:
+        logger.exception("Blotter batch fetch failed")
+        return no_update
+
+    # Phase 2: price each order from cache (no additional API calls)
+    changed = False
+    for order in orders:
+        if order["id"] not in order_legs:
+            continue
+
+        legs, parsed = order_legs[order["id"]]
+        spot = spot_cache.get(parsed.underlying, 0.0)
+        leg_market = [
+            quote_cache.get(
+                (leg.underlying, leg.expiry, leg.strike, leg.option_type.value),
+                LegMarketData(),
+            )
+            for leg in legs
+        ]
+
+        try:
+            struct_data = price_structure_from_market(parsed, leg_market, spot)
+            multiplier = multiplier_cache.get(parsed.underlying, 100)
+            new_table = _build_table_data(parsed, leg_market, struct_data)
+
+            any_leg_failed = any(m.bid == 0 and m.offer == 0 for m in leg_market)
+
+            if any_leg_failed:
+                order["bid"] = "--"
+                order["mid"] = "--"
+                order["offer"] = "--"
+                order["bid_size"] = "--"
+                order["offer_size"] = "--"
+                disp_bid = None
+                disp_mid = None
+                disp_offer = None
+            else:
+                disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+                disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
+                disp_mid = (disp_bid + disp_offer) / 2.0
+
+                # Update display fields (pricing only — manual fields untouched)
+                order["bid"] = f"{disp_bid:.2f}"
+                order["mid"] = f"{disp_mid:.2f}"
+                order["offer"] = f"{disp_offer:.2f}"
+                order["bid_size"] = str(struct_data.structure_bid_size)
+                order["offer_size"] = str(struct_data.structure_offer_size)
+
+            # Update recall data
+            order["_table_data"] = new_table
+            struct_type = order.get("_structure_type", "custom")
+            leg_details = []
+            for leg in legs:
+                t = "C" if leg.option_type == OptionType.CALL else "P"
+                exp_str = leg.expiry.strftime("%b%y") if leg.expiry else ""
+                leg_details.append(f"{leg.strike:.0f}{t} {exp_str}")
+            order["_current_structure"] = {
+                "underlying": parsed.underlying,
+                "structure_name": struct_type.upper().replace("_", " "),
+                "structure_detail": " / ".join(leg_details),
+                "bid": disp_bid,
+                "mid": disp_mid,
+                "offer": disp_offer,
+                "bid_size": struct_data.structure_bid_size if not any_leg_failed else None,
+                "offer_size": struct_data.structure_offer_size if not any_leg_failed else None,
+                "multiplier": multiplier,
+            }
+        except Exception:
+            logger.exception("Blotter reprice failed for order %s", order.get("id"))
+            continue
+
+        recalc_pnl(order)
+        changed = True
 
     if not changed:
-        return no_update, no_update, False
+        return no_update
 
-    updated_orders = list(order_map.values())
-
-    # Persist to JSON
-    store_save_orders(updated_orders)
-
-    # Build display rows
-    display_rows = [
-        {k: v for k, v in o.items() if not k.startswith("_")}
-        for o in updated_orders
-    ]
-
-    return updated_orders, display_rows, True
-
-
-# ---------------------------------------------------------------------------
-# Callback: toggle column panel visibility
-# ---------------------------------------------------------------------------
-
-@callback(
-    Output("column-toggle-panel", "style"),
-    Input("column-toggle-btn", "n_clicks"),
-    State("column-toggle-panel", "style"),
-    prevent_initial_call=True,
-)
-def toggle_column_panel(n_clicks, current_style):
-    if current_style.get("display") == "none":
-        return {"display": "block"}
-    return {"display": "none"}
-
-
-# ---------------------------------------------------------------------------
-# Callback: update visible blotter columns
-# ---------------------------------------------------------------------------
-
-@callback(
-    Output("blotter-table", "columns"),
-    Output("visible-columns", "data"),
-    Input("column-checklist", "value"),
-    prevent_initial_call=True,
-)
-def update_visible_columns(selected_columns):
-    visible = [c for c in _BLOTTER_COLUMNS if c["id"] in selected_columns]
-    return visible, selected_columns
+    # Only update the client-side store — no file write, no table update.
+    return orders
 
 
 # ---------------------------------------------------------------------------
@@ -805,25 +1186,32 @@ def update_visible_columns(selected_columns):
     Output("suppress-template", "data", allow_duplicate=True),
     Output("auto-price-suppress", "data", allow_duplicate=True),
     Input("blotter-table", "active_cell"),
-    State("blotter-table", "data"),
+    State("blotter-table", "derived_virtual_data"),
     State("order-store", "data"),
     prevent_initial_call=True,
 )
-def recall_order(active_cell, blotter_data, orders):
-    if not active_cell or not orders or not blotter_data:
+def recall_order(active_cell, virtual_data, orders):
+    if not active_cell or not orders:
         return (no_update,) * 16
 
+    # derived_virtual_data reflects the current sorted/filtered display order,
+    # so active_cell["row"] indexes correctly into it
+    blotter_view = virtual_data or []
     row_idx = active_cell["row"]
-    if row_idx >= len(blotter_data):
+    if row_idx >= len(blotter_view):
         return (no_update,) * 16
 
     # Get the order id from the displayed row (handles sorted tables)
-    clicked_id = blotter_data[row_idx].get("id")
+    clicked_id = blotter_view[row_idx].get("id")
     if not clicked_id:
         return (no_update,) * 16
 
     # Find the full order in the store by id
     order = next((o for o in orders if o.get("id") == clicked_id), None)
+
+    # Verify the recalled order matches the clicked row's displayed data
+    if order and blotter_view[row_idx].get("underlying") != order.get("underlying"):
+        return (no_update,) * 16
     if not order:
         return (no_update,) * 16
 

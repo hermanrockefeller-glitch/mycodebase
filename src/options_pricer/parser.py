@@ -35,7 +35,29 @@ _STRUCTURE_ALIASES = {
     "strangle": "strangle",
     "fly": "butterfly",
     "butterfly": "butterfly",
+    "iron butterfly": "iron_butterfly",
+    "iron fly": "iron_butterfly",
+    "ibf": "iron_butterfly",
+    "if": "iron_butterfly",
+    "put fly": "put_fly",
+    "putfly": "put_fly",
+    "pf": "put_fly",
+    "call fly": "call_fly",
+    "callfly": "call_fly",
+    "cf": "call_fly",
     "collar": "collar",
+    "iron condor": "iron_condor",
+    "ic": "iron_condor",
+    "put condor": "put_condor",
+    "pc": "put_condor",
+    "call condor": "call_condor",
+    "cc": "call_condor",
+    "call spread collar": "call_spread_collar",
+    "csc": "call_spread_collar",
+    "put spread collar": "put_spread_collar",
+    "psc": "put_spread_collar",
+    "put stupid": "put_stupid",
+    "call stupid": "call_stupid",
 }
 
 
@@ -95,7 +117,13 @@ def parse_order(text: str) -> ParsedOrder:
     )
 
     # Build structure
-    display_name = (structure_type or "single").replace("_", " ")
+    st = structure_type or "single"
+    if st == "single":
+        opt_type = leg_specs[0].get("type") if leg_specs else default_opt_type
+        opt_type = opt_type or default_opt_type
+        display_name = "call" if opt_type == OptionType.CALL else "put"
+    else:
+        display_name = st.replace("_", " ")
     structure = OptionStructure(
         name=display_name,
         legs=legs,
@@ -124,6 +152,24 @@ def parse_order(text: str) -> ParsedOrder:
                 delta = -abs(delta)
             elif structure_type == "put_spread":
                 delta = -abs(delta)
+    elif delta and not delta_direction:
+        # Infer delta sign from structure type when no explicit dp/dc
+        if structure_type in ("put_spread", "put_fly", "put_condor", "put_stupid"):
+            delta = -abs(delta)
+        elif structure_type in ("call_spread", "call_fly", "call_condor", "call_stupid"):
+            delta = abs(delta)
+        elif structure_type == "single" or not structure_type:
+            # For single options, check the option type
+            opt_type = (
+                leg_specs[0].get("type") if leg_specs else default_opt_type
+            )
+            opt_type = opt_type or default_opt_type
+            if opt_type == OptionType.PUT:
+                delta = -abs(delta)
+        elif structure_type == "risk_reversal":
+            if modifier == "putover":
+                delta = -abs(delta)
+            # else positive (default bullish: sell put, buy call)
 
     return ParsedOrder(
         underlying=ticker.upper(),
@@ -156,8 +202,8 @@ def _extract_stock_ref(text: str) -> float | None:
 
 
 def _extract_delta(text: str) -> float | None:
-    """Extract delta: 30d, 3d, on a 11d, +20d, -15d."""
-    m = re.search(r'(?:on\s+a\s+)?([+-]?\d+)\s*d\b', text, re.IGNORECASE)
+    """Extract delta: 30d, 3d, on a 11d, +20d, -15d, 30dp, 20dc."""
+    m = re.search(r'(?:on\s+a\s+)?([+-]?\d+)\s*d[pc]?\b', text, re.IGNORECASE)
     if m:
         return float(m.group(1))
     return None
@@ -225,8 +271,15 @@ def _extract_price_and_side(text: str) -> tuple[float | None, QuoteSide | None]:
     return None, None
 
 
-def _extract_ratio(text: str) -> tuple[int, int] | None:
-    """Extract ratio: 1X2, 1x2, 1x3."""
+def _extract_ratio(text: str) -> tuple[float, ...] | None:
+    """Extract ratio: 1X2, 1x3, 1x2x1, 1x1.5x1."""
+    # Try 3-part first: 1x2x1, 1x1.5x1
+    m = re.search(
+        r'\b(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)\s*[Xx]\s*(\d+(?:\.\d+)?)\b', text
+    )
+    if m:
+        return (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+    # Then 2-part: 1X2
     m = re.search(r'\b(\d+)\s*[Xx]\s*(\d+)\b', text)
     if m:
         a, b = int(m.group(1)), int(m.group(2))
@@ -268,6 +321,11 @@ def _extract_delta_direction(text: str) -> str | None:
         "2x" for delta to the 2x leg,
         None if no direction specified.
     """
+    # Inline suffix: "30dp" (put delta) / "20dc" (call delta)
+    m = re.search(r'\d+\s*d([pc])\b', text, re.IGNORECASE)
+    if m:
+        return "put" if m.group(1).lower() == "p" else "call"
+
     # "delta to the 1x" / "delta to the 2x"
     m = re.search(r'\bdelta\s+to\s+the\s+(\d+)x\b', text, re.IGNORECASE)
     if m:
@@ -352,7 +410,7 @@ def _parse_core(text: str, structure_type: str | None) -> tuple[
         r'^\d+k$',  # quantity in thousands (1k = 1000)
         r'^(?:bid|offer|ask|at)$',
         r'^(?:on|a)$',
-        r'^[+-]?\d+d$',  # delta (including +20d, -15d)
+        r'^[+-]?\d+d[pc]?$',  # delta (including +20d, -15d, 30dp, 20dc)
         r'^(?:delta|live)$',  # delta direction / live qualifier
         r'^(?:the|like|to)$',  # parts of "delta to the 1x" etc.
         r'^@',
@@ -402,6 +460,9 @@ def _parse_core(text: str, structure_type: str | None) -> tuple[
                     _MULTI_LEG = {
                         "put_spread", "call_spread", "spread",
                         "risk_reversal", "strangle", "butterfly",
+                        "iron_butterfly", "put_fly", "call_fly",
+                        "iron_condor", "put_condor", "call_condor",
+                        "call_spread_collar", "put_spread_collar",
                     }
                     while i < len(tokens):
                         next_strike = re.match(
@@ -435,36 +496,24 @@ def _parse_core(text: str, structure_type: str | None) -> tuple[
 
                     continue
 
-                # Check for slash strikes: "240/220"
-                slash_match = re.match(
-                    r'^(\d+\.?\d*)(?:[PCpc])?/(\d+\.?\d*)(?:[PCpc])?$', next_tok
-                )
-                if slash_match:
-                    s1 = float(slash_match.group(1))
-                    s2 = float(slash_match.group(2))
-                    # Check for type chars in slash notation
-                    full_match = re.match(
-                        r'^(\d+\.?\d*)([PCpc])?/(\d+\.?\d*)([PCpc])?$', next_tok
-                    )
-                    t1 = t2 = None
-                    if full_match.group(2):
-                        t1 = (
-                            OptionType.CALL if full_match.group(2).upper() == 'C'
-                            else OptionType.PUT
-                        )
-                    if full_match.group(4):
-                        t2 = (
-                            OptionType.CALL if full_match.group(4).upper() == 'C'
-                            else OptionType.PUT
-                        )
-                    leg_specs.append({
-                        "expiry": current_expiry, "strike": s1, "type": t1,
-                    })
-                    leg_specs.append({
-                        "expiry": current_expiry, "strike": s2, "type": t2,
-                    })
-                    i += 2
-                    continue
+                # Check for slash strikes: "240/220", "220/230/240"
+                if '/' in next_tok:
+                    parts = re.findall(r'(\d+\.?\d*)([PCpc])?', next_tok)
+                    if len(parts) >= 2:
+                        for val_str, type_char in parts:
+                            opt = None
+                            if type_char:
+                                opt = (
+                                    OptionType.CALL if type_char.upper() == 'C'
+                                    else OptionType.PUT
+                                )
+                            leg_specs.append({
+                                "expiry": current_expiry,
+                                "strike": float(val_str),
+                                "type": opt,
+                            })
+                        i += 2
+                        continue
 
             i += 1
             continue
@@ -503,32 +552,24 @@ def _parse_core(text: str, structure_type: str | None) -> tuple[
             i += 1
             continue
 
-        # Check for slash strikes without preceding month: "240/220"
-        slash_match = re.match(
-            r'^(\d+\.?\d*)([PCpc])?/(\d+\.?\d*)([PCpc])?$', token
-        )
-        if slash_match:
-            s1 = float(slash_match.group(1))
-            s2 = float(slash_match.group(3))
-            t1 = t2 = None
-            if slash_match.group(2):
-                t1 = (
-                    OptionType.CALL if slash_match.group(2).upper() == 'C'
-                    else OptionType.PUT
-                )
-            if slash_match.group(4):
-                t2 = (
-                    OptionType.CALL if slash_match.group(4).upper() == 'C'
-                    else OptionType.PUT
-                )
-            leg_specs.append({
-                "expiry": current_expiry, "strike": s1, "type": t1,
-            })
-            leg_specs.append({
-                "expiry": current_expiry, "strike": s2, "type": t2,
-            })
-            i += 1
-            continue
+        # Check for slash strikes without preceding month: "240/220", "220/230/240"
+        if '/' in token:
+            parts = re.findall(r'(\d+\.?\d*)([PCpc])?', token)
+            if len(parts) >= 2:
+                for val_str, type_char in parts:
+                    opt = None
+                    if type_char:
+                        opt = (
+                            OptionType.CALL if type_char.upper() == 'C'
+                            else OptionType.PUT
+                        )
+                    leg_specs.append({
+                        "expiry": current_expiry,
+                        "strike": float(val_str),
+                        "type": opt,
+                    })
+                i += 1
+                continue
 
         # Check for option type word: "calls", "puts", "call", "put"
         # Skip if part of "delta to/like call/put" or "call/put over"
@@ -581,7 +622,7 @@ def _build_legs(
     leg_specs: list[dict],
     default_opt_type: OptionType | None,
     structure_type: str | None,
-    ratio_tuple: tuple[int, int] | None,
+    ratio_tuple: tuple[float, ...] | None,
     modifier: str | None,
     quantity: int,
 ) -> list[OptionLeg]:
@@ -595,13 +636,15 @@ def _build_legs(
         if spec.get("type") is None:
             spec["type"] = default_opt_type
 
-    # Determine ratios
-    r1, r2 = (1, 1) if ratio_tuple is None else ratio_tuple
+    # Determine ratios for 2-leg structures
+    r1, r2 = (1, 1) if ratio_tuple is None or len(ratio_tuple) != 2 else ratio_tuple
 
     st = structure_type or "single"
 
     if st == "single":
         return _build_single(ticker, leg_specs, quantity)
+    elif st in ("put_stupid", "call_stupid"):
+        return _build_stupid(ticker, leg_specs, st, quantity)
     elif st in ("put_spread", "call_spread", "spread"):
         return _build_spread(ticker, leg_specs, st, quantity, r1, r2)
     elif st == "risk_reversal":
@@ -611,9 +654,25 @@ def _build_legs(
     elif st == "strangle":
         return _build_strangle(ticker, leg_specs, quantity)
     elif st == "butterfly":
-        return _build_butterfly(ticker, leg_specs, quantity, default_opt_type)
+        return _build_butterfly(ticker, leg_specs, quantity, default_opt_type, ratio_tuple)
+    elif st == "iron_butterfly":
+        return _build_iron_butterfly(ticker, leg_specs, quantity)
+    elif st == "put_fly":
+        return _build_put_fly(ticker, leg_specs, quantity, ratio_tuple)
+    elif st == "call_fly":
+        return _build_call_fly(ticker, leg_specs, quantity, ratio_tuple)
     elif st == "collar":
         return _build_collar(ticker, leg_specs, quantity)
+    elif st == "iron_condor":
+        return _build_iron_condor(ticker, leg_specs, quantity)
+    elif st == "put_condor":
+        return _build_put_condor(ticker, leg_specs, quantity)
+    elif st == "call_condor":
+        return _build_call_condor(ticker, leg_specs, quantity)
+    elif st == "call_spread_collar":
+        return _build_call_spread_collar(ticker, leg_specs, quantity)
+    elif st == "put_spread_collar":
+        return _build_put_spread_collar(ticker, leg_specs, quantity)
     else:
         raise ValueError(f"Unknown structure type: {st}")
 
@@ -634,6 +693,28 @@ def _build_single(ticker: str, specs: list[dict], quantity: int) -> list[OptionL
         underlying=ticker, expiry=spec["expiry"], strike=spec["strike"],
         option_type=_resolve_type(spec), side=Side.BUY, quantity=quantity,
     )]
+
+
+def _build_stupid(
+    ticker: str, specs: list[dict], stupid_type: str, quantity: int,
+) -> list[OptionLeg]:
+    """Stupid: buy two options of the same type at different strikes."""
+    if len(specs) < 2:
+        raise ValueError("Stupid requires at least 2 strikes")
+    opt_type = OptionType.PUT if stupid_type == "put_stupid" else OptionType.CALL
+    sorted_specs = sorted(specs[:2], key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=opt_type,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=opt_type,
+            side=Side.BUY, quantity=quantity,
+        ),
+    ]
 
 
 def _build_spread(
@@ -661,17 +742,17 @@ def _build_spread(
     low_spec = s2 if s1["strike"] >= s2["strike"] else s1
 
     if opt_type == OptionType.PUT:
-        # Put spread: sell higher (r1), buy lower (r2)
+        # Put spread: buy higher (r1), sell lower (r2) — higher strike is over
         return [
             OptionLeg(
                 underlying=ticker, expiry=high_spec["expiry"],
                 strike=high_strike, option_type=OptionType.PUT,
-                side=Side.SELL, quantity=quantity * r1,
+                side=Side.BUY, quantity=quantity * r1,
             ),
             OptionLeg(
                 underlying=ticker, expiry=low_spec["expiry"],
                 strike=low_strike, option_type=OptionType.PUT,
-                side=Side.BUY, quantity=quantity * r2,
+                side=Side.SELL, quantity=quantity * r2,
             ),
         ]
     else:
@@ -783,25 +864,127 @@ def _build_strangle(
 def _build_butterfly(
     ticker: str, specs: list[dict], quantity: int,
     default_opt_type: OptionType | None,
+    ratio_tuple: tuple[float, ...] | None = None,
 ) -> list[OptionLeg]:
     if len(specs) < 3:
         raise ValueError("Butterfly requires 3 strikes")
     sorted_specs = sorted(specs, key=lambda s: s["strike"])
     opt_type = sorted_specs[0].get("type") or default_opt_type or OptionType.CALL
+
+    if ratio_tuple and len(ratio_tuple) == 3:
+        r1, r2, r3 = ratio_tuple
+    else:
+        r1, r2, r3 = 1, 2, 1
+
     return [
         OptionLeg(
             underlying=ticker, expiry=sorted_specs[0]["expiry"],
             strike=sorted_specs[0]["strike"], option_type=opt_type,
-            side=Side.BUY, quantity=quantity,
+            side=Side.BUY, quantity=int(quantity * r1),
         ),
         OptionLeg(
             underlying=ticker, expiry=sorted_specs[1]["expiry"],
             strike=sorted_specs[1]["strike"], option_type=opt_type,
-            side=Side.SELL, quantity=quantity * 2,
+            side=Side.SELL, quantity=int(quantity * r2),
         ),
         OptionLeg(
             underlying=ticker, expiry=sorted_specs[2]["expiry"],
             strike=sorted_specs[2]["strike"], option_type=opt_type,
+            side=Side.BUY, quantity=int(quantity * r3),
+        ),
+    ]
+
+
+def _build_put_fly(
+    ticker: str, specs: list[dict], quantity: int,
+    ratio_tuple: tuple[float, ...] | None = None,
+) -> list[OptionLeg]:
+    if len(specs) < 3:
+        raise ValueError("Put fly requires 3 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+
+    if ratio_tuple and len(ratio_tuple) == 3:
+        r1, r2, r3 = ratio_tuple
+    else:
+        r1, r2, r3 = 1, 2, 1
+
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=int(quantity * r1),
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=int(quantity * r2),
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=int(quantity * r3),
+        ),
+    ]
+
+
+def _build_call_fly(
+    ticker: str, specs: list[dict], quantity: int,
+    ratio_tuple: tuple[float, ...] | None = None,
+) -> list[OptionLeg]:
+    if len(specs) < 3:
+        raise ValueError("Call fly requires 3 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+
+    if ratio_tuple and len(ratio_tuple) == 3:
+        r1, r2, r3 = ratio_tuple
+    else:
+        r1, r2, r3 = 1, 2, 1
+
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=int(quantity * r1),
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=int(quantity * r2),
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=int(quantity * r3),
+        ),
+    ]
+
+
+def _build_iron_butterfly(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    if len(specs) < 3:
+        raise ValueError("Iron butterfly requires 3 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    low, mid, high = sorted_specs[0], sorted_specs[1], sorted_specs[2]
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=low["expiry"],
+            strike=low["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=mid["expiry"],
+            strike=mid["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=mid["expiry"],
+            strike=mid["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=high["expiry"],
+            strike=high["strike"], option_type=OptionType.CALL,
             side=Side.BUY, quantity=quantity,
         ),
     ]
@@ -822,6 +1005,151 @@ def _build_collar(
         OptionLeg(
             underlying=ticker, expiry=sorted_specs[1]["expiry"],
             strike=sorted_specs[1]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+    ]
+
+
+def _build_iron_condor(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    """Iron condor: 4 strikes — buy OTM put, sell closer put, sell closer call, buy OTM call."""
+    if len(specs) < 4:
+        raise ValueError("Iron condor requires 4 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[3]["expiry"],
+            strike=sorted_specs[3]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=quantity,
+        ),
+    ]
+
+
+def _build_put_condor(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    """Put condor: 4 strikes, all puts — buy lowest, sell 2nd, sell 3rd, buy highest."""
+    if len(specs) < 4:
+        raise ValueError("Put condor requires 4 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[3]["expiry"],
+            strike=sorted_specs[3]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+    ]
+
+
+def _build_call_condor(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    """Call condor: 4 strikes, all calls — buy lowest, sell 2nd, sell 3rd, buy highest."""
+    if len(specs) < 4:
+        raise ValueError("Call condor requires 4 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[3]["expiry"],
+            strike=sorted_specs[3]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=quantity,
+        ),
+    ]
+
+
+def _build_call_spread_collar(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    """Call spread collar: 3 strikes — buy put, sell lower call, buy higher call."""
+    if len(specs) < 3:
+        raise ValueError("Call spread collar requires 3 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.CALL,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.CALL,
+            side=Side.BUY, quantity=quantity,
+        ),
+    ]
+
+
+def _build_put_spread_collar(
+    ticker: str, specs: list[dict], quantity: int,
+) -> list[OptionLeg]:
+    """Put spread collar: 3 strikes — sell lower put, buy higher put, sell call."""
+    if len(specs) < 3:
+        raise ValueError("Put spread collar requires 3 strikes")
+    sorted_specs = sorted(specs, key=lambda s: s["strike"])
+    return [
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[0]["expiry"],
+            strike=sorted_specs[0]["strike"], option_type=OptionType.PUT,
+            side=Side.SELL, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[1]["expiry"],
+            strike=sorted_specs[1]["strike"], option_type=OptionType.PUT,
+            side=Side.BUY, quantity=quantity,
+        ),
+        OptionLeg(
+            underlying=ticker, expiry=sorted_specs[2]["expiry"],
+            strike=sorted_specs[2]["strike"], option_type=OptionType.CALL,
             side=Side.SELL, quantity=quantity,
         ),
     ]

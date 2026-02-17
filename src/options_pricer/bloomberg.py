@@ -4,11 +4,14 @@ Provides a mock-friendly interface so the dashboard and tests can run
 without a Bloomberg Terminal connection.
 """
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date
 
 from scipy.stats import norm
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,6 +43,10 @@ class BloombergClient:
         self._port = port
         self._session = None
 
+    @property
+    def source_name(self) -> str:
+        return "Bloomberg API"
+
     def connect(self) -> bool:
         try:
             import blpapi
@@ -49,7 +56,11 @@ class BloombergClient:
             session_options.setServerPort(self._port)
             self._session = blpapi.Session(session_options)
             return self._session.start()
-        except (ImportError, Exception):
+        except ImportError:
+            logger.debug("blpapi not installed — falling back to mock client")
+            return False
+        except Exception:
+            logger.debug("Bloomberg connection failed", exc_info=True)
             return False
 
     def disconnect(self):
@@ -79,6 +90,7 @@ class BloombergClient:
                 if event.eventType() == blpapi.Event.RESPONSE:
                     break
         except Exception:
+            logger.warning("Failed to fetch spot for %s", underlying, exc_info=True)
             return None
 
     def get_option_quote(
@@ -115,23 +127,24 @@ class BloombergClient:
                         try:
                             quote.bid = fd.getElementAsFloat("BID")
                         except Exception:
-                            pass
+                            logger.debug("BID field missing for %s", ticker)
                         try:
                             quote.offer = fd.getElementAsFloat("ASK")
                         except Exception:
-                            pass
+                            logger.debug("ASK field missing for %s", ticker)
                         try:
                             quote.bid_size = int(fd.getElementAsFloat("BID_SIZE"))
                         except Exception:
-                            pass
+                            logger.debug("BID_SIZE field missing for %s", ticker)
                         try:
                             quote.offer_size = int(fd.getElementAsFloat("ASK_SIZE"))
                         except Exception:
-                            pass
+                            logger.debug("ASK_SIZE field missing for %s", ticker)
                 if event.eventType() == blpapi.Event.RESPONSE:
                     break
             return quote
         except Exception:
+            logger.warning("Failed to fetch option quote for %s", ticker, exc_info=True)
             return OptionQuote()
 
     def get_implied_vol(
@@ -169,7 +182,7 @@ class BloombergClient:
                 if event.eventType() == blpapi.Event.RESPONSE:
                     break
         except Exception:
-            pass
+            logger.warning("Failed to fetch contract multiplier for %s", underlying, exc_info=True)
         return 100
 
     def get_market_data(self, underlying: str) -> MarketData:
@@ -184,6 +197,10 @@ class BloombergClient:
 
 class MockBloombergClient:
     """Mock Bloomberg client with realistic option pricing for development."""
+
+    @property
+    def source_name(self) -> str:
+        return "Mock Data"
 
     _MOCK_SPOTS: dict[str, float] = {
         "AAPL": 250.30,
@@ -296,6 +313,10 @@ class MockBloombergClient:
     def _bs_price(
         S: float, K: float, T: float, r: float, sigma: float, option_type: str,
     ) -> float:
+        if S <= 0 or K <= 0 or sigma <= 0:
+            if option_type == "call":
+                return max(S - K, 0.0)
+            return max(K - S, 0.0)
         d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
         d2 = d1 - sigma * math.sqrt(T)
         if option_type == "call":

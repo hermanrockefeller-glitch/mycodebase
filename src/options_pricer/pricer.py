@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass
 
-import numpy as np
 from scipy.stats import norm
 
 from .models import OptionLeg, OptionStructure, OptionType
@@ -57,11 +56,14 @@ def black_scholes_price(
     Returns:
         Option price.
     """
-    if T <= 0:
-        # At or past expiration: return intrinsic value
+    if T <= 0 or sigma <= 0:
+        # At/past expiration or zero vol: return intrinsic value
         if option_type == OptionType.CALL:
             return max(S - K, 0.0)
         return max(K - S, 0.0)
+
+    if S <= 0 or K <= 0:
+        return 0.0
 
     d1, d2 = _d1_d2(S, K, T, r, sigma, q)
 
@@ -98,8 +100,8 @@ def greeks(
     """
     price = black_scholes_price(S, K, T, r, sigma, option_type, q)
 
-    if T <= 0:
-        # At expiry: delta is 0 or 1, other Greeks are 0
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        # At expiry, zero vol, or invalid inputs: delta is 0 or 1, other Greeks are 0
         in_the_money = (option_type == OptionType.CALL and S > K) or (
             option_type == OptionType.PUT and S < K
         )
@@ -203,6 +205,10 @@ def _d1_d2(
     S: float, K: float, T: float, r: float, sigma: float, q: float
 ) -> tuple[float, float]:
     """Calculate d1 and d2 for Black-Scholes formula."""
+    if S <= 0 or K <= 0:
+        raise ValueError(f"S and K must be positive (S={S}, K={K})")
+    if sigma <= 0:
+        raise ValueError(f"sigma must be positive (sigma={sigma})")
     d1 = (math.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     return d1, d2
