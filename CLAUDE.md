@@ -128,6 +128,13 @@ Auto-refresh updates ONLY calculations and live-feed data from the API. It must 
 - **CRITICAL: Any callback that programmatically writes to `blotter-table.data` MUST also output `blotter-edit-suppress = True`.** Writing to `data` triggers `data_timestamp`, which fires `sync_blotter_edits`. Without the suppress flag, `sync_blotter_edits` runs, potentially writes back to `order-store.data`, which re-triggers the original callback — creating an infinite loop. This applies to `push_store_to_blotter`, `sync_blotter_edits` itself, and `add_order`.
 - **CRITICAL: Every return path in a callback must return the correct number of values matching its Output count.** A callback with N Outputs must return N values on every path (including early returns). Returning fewer values causes Dash errors. Use `return no_update, no_update, ...` (one per Output) for skip paths.
 
+## Pricer Auto-Recalculation Principle
+Any change to a pricing input must trigger automatic recalculation of structure bid/mid/offer. Pricing inputs include:
+- **Table edits:** expiry, strike, type, ratio (via `data_timestamp`)
+- **Toolbar fields:** underlying, tie, delta, broker price, side, quantity (all `Input`, not `State`)
+- The `auto-price-suppress` flag prevents self-loops (callback outputs table → timestamp fires → suppress blocks → resets to False)
+- Toolbar `dcc.Input` fields must have `debounce=True` to avoid per-keystroke repricing
+
 ## Bloomberg Failure Visibility (MUST follow for all pricing displays)
 Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently show zero prices or fallback values.
 

@@ -24,10 +24,24 @@ from ..parser import parse_expiry, parse_order
 from ..structure_pricer import price_structure_from_market
 from .callbacks import recalc_pnl, register_blotter_callbacks
 from .layouts import (
+    ACCENT,
     ALERT_BANNER_STYLE,
     BADGE_BLUE,
     BADGE_GREEN,
     BADGE_RED,
+    BG_SURFACE,
+    BORDER_DEFAULT,
+    FONT_MONO,
+    FONT_SIZE_LG,
+    FONT_SIZE_XL,
+    GREEN_PRIMARY,
+    RADIUS_LG,
+    RED_PRIMARY,
+    SPACE_LG,
+    SPACE_XXL,
+    TEXT_STALE,
+    WEIGHT_BOLD,
+    WEIGHT_SEMIBOLD,
     _EMPTY_ROW,
     _make_empty_rows,
     create_layout,
@@ -113,27 +127,28 @@ def toggle_data_source(n_clicks, current_source):
 _HIDDEN = {"display": "none"}
 
 _HEADER_VISIBLE_STYLE = {
-    "backgroundColor": "#1a1a2e",
-    "padding": "12px 20px",
-    "borderRadius": "6px",
+    "backgroundColor": BG_SURFACE,
+    "padding": f"{SPACE_LG} {SPACE_XXL}",
+    "borderRadius": RADIUS_LG,
     "marginBottom": "15px",
     "display": "block",
+    "borderLeft": f"3px solid {ACCENT}",
 }
 
 _BROKER_VISIBLE_STYLE = {
-    "backgroundColor": "#1a1a2e",
-    "padding": "15px 20px",
-    "borderRadius": "6px",
+    "backgroundColor": BG_SURFACE,
+    "padding": f"15px {SPACE_XXL}",
+    "borderRadius": RADIUS_LG,
     "marginTop": "15px",
     "display": "flex",
-    "gap": "20px",
+    "gap": SPACE_XXL,
     "alignItems": "center",
 }
 
 _ORDER_INPUT_VISIBLE_STYLE = {
-    "backgroundColor": "#1a1a2e",
-    "padding": "15px 20px",
-    "borderRadius": "6px",
+    "backgroundColor": BG_SURFACE,
+    "padding": f"15px {SPACE_XXL}",
+    "borderRadius": RADIUS_LG,
     "marginTop": "15px",
     "display": "block",
 }
@@ -345,7 +360,7 @@ def _build_header_and_extras(order, spot, struct_data, multiplier, leg_market=No
     header_items.append(
         html.Span(
             f"{order.underlying} {structure_name}",
-            style={"color": "#00d4ff", "fontWeight": "bold", "fontSize": "17px"},
+            style={"color": ACCENT, "fontWeight": WEIGHT_BOLD, "fontSize": FONT_SIZE_XL},
         )
     )
     if order.stock_ref > 0:
@@ -379,19 +394,19 @@ def _build_header_and_extras(order, spot, struct_data, multiplier, leg_market=No
         broker_content = [
             html.Span(
                 f"Broker: {order.price:.2f} {side_label}",
-                style={"fontSize": "16px", "marginRight": "30px"},
+                style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
             ),
             html.Span(
                 f"Screen Mid: {disp_mid:.2f}",
-                style={"fontSize": "16px", "marginRight": "30px"},
+                style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
             ),
         ]
         edge = order.price - disp_mid
-        edge_color = "#00ff88" if edge > 0 else "#ff4444"
+        edge_color = GREEN_PRIMARY if edge > 0 else RED_PRIMARY
         broker_content.append(
             html.Span(
                 f"Edge: {edge:+.2f}",
-                style={"fontSize": "16px", "color": edge_color, "fontWeight": "bold"},
+                style={"fontSize": FONT_SIZE_LG, "color": edge_color, "fontWeight": WEIGHT_BOLD, "fontFamily": FONT_MONO},
             )
         )
         broker_style = _BROKER_VISIBLE_STYLE
@@ -400,11 +415,11 @@ def _build_header_and_extras(order, spot, struct_data, multiplier, leg_market=No
         broker_content = [
             html.Span(
                 f"Broker: {order.price:.2f} {side_label}",
-                style={"fontSize": "16px", "marginRight": "30px"},
+                style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
             ),
             html.Span(
                 "Screen Mid: --",
-                style={"fontSize": "16px", "marginRight": "30px", "color": "#666", "fontStyle": "italic"},
+                style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "color": TEXT_STALE, "fontStyle": "italic", "fontFamily": FONT_MONO},
             ),
         ]
         broker_style = _BROKER_VISIBLE_STYLE
@@ -657,19 +672,19 @@ def flip_structure(n_clicks, table_data, current_delta):
     Output("auto-price-suppress", "data", allow_duplicate=True),
     Input("pricing-display", "data_timestamp"),
     Input("manual-underlying", "value"),
+    Input("manual-stock-ref", "value"),
+    Input("manual-delta", "value"),
+    Input("manual-broker-price", "value"),
+    Input("manual-quote-side", "value"),
+    Input("manual-quantity", "value"),
     State("auto-price-suppress", "data"),
     State("pricing-display", "data"),
     State("manual-structure-type", "value"),
-    State("manual-stock-ref", "value"),
-    State("manual-delta", "value"),
-    State("manual-broker-price", "value"),
-    State("manual-quote-side", "value"),
-    State("manual-quantity", "value"),
     prevent_initial_call=True,
 )
-def auto_price_from_table(data_ts, underlying, suppress,
-                          table_data, struct_type, stock_ref,
-                          delta, broker_price, quote_side_val, order_qty):
+def auto_price_from_table(data_ts, underlying, stock_ref, delta,
+                          broker_price, quote_side_val, order_qty,
+                          suppress, table_data, struct_type):
     noop = ("",) + (no_update,) * 7 + (False,)
 
     # Suppress prevents self-loop: callback outputs table → data_timestamp
@@ -802,7 +817,7 @@ def refresh_live_display(n_intervals, current_data, underlying,
     header_items = [
         html.Span(
             f"{underlying} {structure_name}",
-            style={"color": "#00d4ff", "fontWeight": "bold", "fontSize": "17px"},
+            style={"color": ACCENT, "fontWeight": WEIGHT_BOLD, "fontSize": FONT_SIZE_XL},
         ),
     ]
     if stock_ref:
@@ -825,22 +840,23 @@ def refresh_live_display(n_intervals, current_data, underlying,
             if bp > 0 and mid_f > 0:
                 side_label = quote_side_val.upper() if quote_side_val else "BID"
                 edge = bp - mid_f
-                edge_color = "#00ff88" if edge > 0 else "#ff4444"
+                edge_color = GREEN_PRIMARY if edge > 0 else RED_PRIMARY
                 broker_content = [
                     html.Span(
                         f"Broker: {bp:.2f} {side_label}",
-                        style={"fontSize": "16px", "marginRight": "30px"},
+                        style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
                     ),
                     html.Span(
                         f"Screen Mid: {mid_f:.2f}",
-                        style={"fontSize": "16px", "marginRight": "30px"},
+                        style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
                     ),
                     html.Span(
                         f"Edge: {edge:+.2f}",
                         style={
-                            "fontSize": "16px",
+                            "fontSize": FONT_SIZE_LG,
                             "color": edge_color,
-                            "fontWeight": "bold",
+                            "fontWeight": WEIGHT_BOLD,
+                            "fontFamily": FONT_MONO,
                         },
                     ),
                 ]
@@ -1003,9 +1019,10 @@ register_blotter_callbacks()
     Input("live-refresh-interval", "n_intervals"),
     State("order-store", "data"),
     State("blotter-table", "data"),
+    State("blotter-table", "data_timestamp"),
     prevent_initial_call=True,
 )
-def refresh_blotter_prices(n_intervals, orders, blotter_data):
+def refresh_blotter_prices(n_intervals, orders, blotter_data, data_ts):
     """Re-price every blotter order from live market data each tick.
 
     Updates the client-side order store and persists to JSON so the Admin
@@ -1015,16 +1032,23 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data):
     if not orders:
         return no_update, no_update
 
-    # Merge pending manual edits from the blotter display so they aren't
-    # lost when the store is written back.
+    # Only merge manual fields from the pricer's blotter table if a cell
+    # was edited recently on the pricer.  This protects uncommitted pricer
+    # edits without overwriting admin dashboard edits that arrived via
+    # JSON polling into order-store.  The pricer's blotter-table is stale
+    # for admin-originated edits (no push_store_to_blotter on the pricer),
+    # so an unconditional merge would revert admin changes.
+    import time
     _MANUAL_FIELDS = ("side", "size", "traded", "bought_sold", "traded_price", "initiator")
-    blotter_by_id = {r["id"]: r for r in (blotter_data or []) if "id" in r}
-    for order in orders:
-        row = blotter_by_id.get(order.get("id"))
-        if row:
-            for f in _MANUAL_FIELDS:
-                if f in row:
-                    order[f] = row[f]
+    now_ms = time.time() * 1000
+    if data_ts and (now_ms - data_ts) < 5000:
+        blotter_by_id = {r["id"]: r for r in (blotter_data or []) if "id" in r}
+        for order in orders:
+            row = blotter_by_id.get(order.get("id"))
+            if row:
+                for f in _MANUAL_FIELDS:
+                    if f in row:
+                        order[f] = row[f]
 
     # Phase 1: scan orders, build legs, collect unique tickers for batch fetch
     order_legs = {}  # id → (legs, ParsedOrder)
@@ -1232,7 +1256,7 @@ def recall_order(active_cell, virtual_data, orders):
         header_items = [
             html.Span(
                 f"{current_data['underlying']} {current_data['structure_name']}",
-                style={"color": "#00d4ff", "fontWeight": "bold", "fontSize": "17px"},
+                style={"color": ACCENT, "fontWeight": WEIGHT_BOLD, "fontSize": FONT_SIZE_XL},
             ),
         ]
         header_style = _HEADER_VISIBLE_STYLE
@@ -1243,19 +1267,19 @@ def recall_order(active_cell, virtual_data, orders):
             quote_side = (order.get("_quote_side") or "bid").upper()
             mid = current_data["mid"]
             edge = float(broker_px) - mid
-            edge_color = "#00ff88" if edge > 0 else "#ff4444"
+            edge_color = GREEN_PRIMARY if edge > 0 else RED_PRIMARY
             broker_content = [
                 html.Span(
                     f"Broker: {float(broker_px):.2f} {quote_side}",
-                    style={"fontSize": "16px", "marginRight": "30px"},
+                    style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
                 ),
                 html.Span(
                     f"Screen Mid: {mid:.2f}",
-                    style={"fontSize": "16px", "marginRight": "30px"},
+                    style={"fontSize": FONT_SIZE_LG, "marginRight": "30px", "fontFamily": FONT_MONO},
                 ),
                 html.Span(
                     f"Edge: {edge:+.2f}",
-                    style={"fontSize": "16px", "color": edge_color, "fontWeight": "bold"},
+                    style={"fontSize": FONT_SIZE_LG, "color": edge_color, "fontWeight": WEIGHT_BOLD, "fontFamily": FONT_MONO},
                 ),
             ]
             broker_style = _BROKER_VISIBLE_STYLE

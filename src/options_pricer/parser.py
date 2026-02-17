@@ -132,7 +132,12 @@ def parse_order(text: str) -> ParsedOrder:
 
     # LIVE = options only, no stock hedge
     if is_live:
-        stock_ref = 0.0
+        if stock_ref:
+            raise ValueError(
+                "Contradictory order: 'live' (options only) but a stock tie "
+                f"(vs{stock_ref:g}) was also specified. "
+                "Is this live or tied? Please refine the order."
+            )
         delta = 0.0
 
     # Apply delta sign from direction qualifier

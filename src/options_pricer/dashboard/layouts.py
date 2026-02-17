@@ -4,48 +4,164 @@ from dash import dcc, html, dash_table
 
 from ..order_store import get_orders_mtime, load_orders, orders_to_display
 
-# Reusable styles
+# ==========================================================================
+# THEME SYSTEM — All visual constants in one place
+# ==========================================================================
+
+# --- Color Palette ---
+# Background layers (dark grey, NOT pure black)
+BG_ROOT = "#1a1a24"        # Darkest: root page background
+BG_SURFACE = "#22222e"     # Primary surface (panels, toolbars, card backgrounds)
+BG_ELEVATED = "#2a2a38"    # Elevated surface (table cells, input fields)
+BG_EDITABLE = "#2f3044"    # Editable cells (slightly lighter to signal interactivity)
+BG_HOVER = "#353548"       # Hover/active states
+BG_STRUCTURE = "#1e2e4a"   # Structure summary row (subtle blue tint)
+
+# Text hierarchy
+TEXT_PRIMARY = "#e8e8ec"    # Primary text (high contrast on dark)
+TEXT_SECONDARY = "#9898a6"  # Secondary labels, column headers
+TEXT_TERTIARY = "#5c5c6e"   # Disabled, hints, placeholder
+TEXT_STALE = "#4a4a5c"      # Stale/unavailable data
+
+# Directional colors (colorblind-friendly — differ in luminance for CVD)
+GREEN_PRIMARY = "#2ecc71"   # Buy/bid/positive edge
+GREEN_MUTED = "#1fa558"     # Subtle positive indicators
+RED_PRIMARY = "#e74c3c"     # Sell/offer/negative edge
+RED_MUTED = "#c0392b"       # Subtle negative indicators
+RED_DESTRUCTIVE = "#a62020" # Destructive actions (clear button)
+
+# Accent
+ACCENT = "#4aa3df"          # Interactive elements, links, structure highlights
+ACCENT_BRIGHT = "#5bb8f5"   # Hover state for accent
+ACCENT_DIM = "#2d7ab8"      # Subtle accent (borders, rules)
+
+# Borders
+BORDER_SUBTLE = "#2a2a3a"   # Table cell borders, dividers
+BORDER_DEFAULT = "#3a3a4c"  # Input borders, card outlines
+BORDER_FOCUS = "#4aa3df"    # Focus rings, active cell
+
+# Status badges
+STATUS_LIVE = "#27ae60"     # Bloomberg connected
+STATUS_MOCK = "#3498db"     # Mock data
+STATUS_ERROR = "#c0392b"    # Connection failed
+STATUS_ALERT_BG = "#c0392b"
+
+# --- Typography ---
+FONT_BODY = "'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif"
+FONT_MONO = ("'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', "
+             "'Consolas', monospace")
+
+# Size scale (px)
+FONT_SIZE_XS = "10px"      # Timestamps, tertiary labels
+FONT_SIZE_SM = "11px"      # Status text, hints
+FONT_SIZE_BASE = "12px"    # Standard labels, column headers
+FONT_SIZE_DATA = "13px"    # Table data cells (monospace)
+FONT_SIZE_MD = "14px"      # Toolbar inputs
+FONT_SIZE_LG = "16px"      # Broker quote values, key metrics
+FONT_SIZE_XL = "18px"      # Structure name in header
+FONT_SIZE_H3 = "16px"      # Section headers
+FONT_SIZE_H1 = "22px"      # App title
+
+# Font weights
+WEIGHT_NORMAL = "400"
+WEIGHT_MEDIUM = "500"
+WEIGHT_SEMIBOLD = "600"
+WEIGHT_BOLD = "700"
+
+# --- Spacing ---
+SPACE_XS = "2px"
+SPACE_SM = "4px"
+SPACE_MD = "8px"
+SPACE_LG = "12px"
+SPACE_XL = "16px"
+SPACE_XXL = "20px"
+
+# Table cell padding (tighter for density)
+CELL_PADDING = "5px 8px"          # Standard data cell
+CELL_PADDING_HEADER = "6px 8px"   # Column headers
+CELL_PADDING_BLOTTER = "6px 10px" # Blotter (slightly wider)
+
+# Border radius
+RADIUS_SM = "3px"
+RADIUS_MD = "4px"
+RADIUS_LG = "6px"
+
+# ==========================================================================
+# Derived style dicts
+# ==========================================================================
+
 _INPUT_STYLE = {
-    "padding": "8px",
-    "backgroundColor": "#16213e",
-    "color": "#e0e0e0",
-    "border": "1px solid #333",
-    "borderRadius": "4px",
-    "fontFamily": "monospace",
-    "fontSize": "13px",
+    "padding": SPACE_MD,
+    "backgroundColor": BG_ELEVATED,
+    "color": TEXT_PRIMARY,
+    "border": f"1px solid {BORDER_DEFAULT}",
+    "borderRadius": RADIUS_MD,
+    "fontFamily": FONT_MONO,
+    "fontSize": FONT_SIZE_MD,
+    "outline": "none",
 }
 
 _DROPDOWN_STYLE = {
     "width": "110px",
-    "backgroundColor": "#16213e",
+    "backgroundColor": BG_ELEVATED,
     "color": "#000",
-    "fontSize": "13px",
+    "fontSize": FONT_SIZE_DATA,
 }
 
-_LABEL_STYLE = {"color": "#aaa", "fontSize": "12px", "marginBottom": "4px"}
+_LABEL_STYLE = {
+    "color": TEXT_SECONDARY,
+    "fontSize": FONT_SIZE_BASE,
+    "marginBottom": SPACE_SM,
+    "fontWeight": WEIGHT_MEDIUM,
+    "letterSpacing": "0.3px",
+    "textTransform": "uppercase",
+}
+
+# Shared button styles
+_ACTION_BTN = {
+    "padding": f"{SPACE_SM} 12px",
+    "fontSize": FONT_SIZE_BASE,
+    "backgroundColor": BG_ELEVATED,
+    "color": TEXT_SECONDARY,
+    "border": f"1px solid {BORDER_DEFAULT}",
+    "borderRadius": RADIUS_MD,
+    "cursor": "pointer",
+    "fontFamily": FONT_MONO,
+}
+
+_CLEAR_BTN = {
+    **_ACTION_BTN,
+    "backgroundColor": RED_DESTRUCTIVE,
+    "color": TEXT_PRIMARY,
+    "border": f"1px solid {RED_MUTED}",
+    "marginLeft": SPACE_LG,
+}
 
 # Data source badge styles (shared with app.py toggle callback)
 BADGE_STYLE_BASE = {
-    "padding": "4px 10px",
-    "borderRadius": "12px",
-    "fontSize": "12px",
-    "fontFamily": "monospace",
+    "padding": "3px 10px",
+    "borderRadius": "10px",
+    "fontSize": FONT_SIZE_SM,
+    "fontFamily": FONT_MONO,
+    "fontWeight": WEIGHT_SEMIBOLD,
     "color": "white",
+    "letterSpacing": "0.5px",
 }
-BADGE_GREEN = {**BADGE_STYLE_BASE, "backgroundColor": "#198754"}
-BADGE_BLUE = {**BADGE_STYLE_BASE, "backgroundColor": "#0d6efd"}
-BADGE_RED = {**BADGE_STYLE_BASE, "backgroundColor": "#dc3545"}
+BADGE_GREEN = {**BADGE_STYLE_BASE, "backgroundColor": STATUS_LIVE}
+BADGE_BLUE = {**BADGE_STYLE_BASE, "backgroundColor": STATUS_MOCK}
+BADGE_RED = {**BADGE_STYLE_BASE, "backgroundColor": STATUS_ERROR}
 
 ALERT_BANNER_STYLE = {
     "display": "block",
-    "backgroundColor": "#dc3545",
+    "backgroundColor": STATUS_ALERT_BG,
     "color": "white",
-    "padding": "8px 16px",
-    "borderRadius": "4px",
-    "fontSize": "13px",
-    "fontFamily": "monospace",
-    "marginTop": "10px",
+    "padding": f"{SPACE_MD} {SPACE_XL}",
+    "borderRadius": RADIUS_MD,
+    "fontSize": FONT_SIZE_DATA,
+    "fontFamily": FONT_MONO,
+    "marginTop": SPACE_LG,
     "textAlign": "center",
+    "fontWeight": WEIGHT_MEDIUM,
 }
 
 STRUCTURE_TYPE_OPTIONS = [
@@ -87,6 +203,7 @@ def _make_empty_rows(n: int = 2) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _BLOTTER_COLUMNS = [
+    {"name": "ID", "id": "id", "editable": False},
     {"name": "Time", "id": "added_time", "editable": False},
     {"name": "Underlying", "id": "underlying", "editable": False},
     {"name": "Structure", "id": "structure", "editable": False},
@@ -105,7 +222,7 @@ _BLOTTER_COLUMNS = [
 ]
 
 _DEFAULT_VISIBLE = [
-    "added_time", "underlying", "structure", "bid", "mid", "offer",
+    "id", "added_time", "underlying", "structure", "bid", "mid", "offer",
     "side", "size", "traded", "traded_price", "initiator", "pnl",
 ]
 
@@ -129,8 +246,12 @@ def create_header(initial_source="Mock Data"):
         },
         children=[
             html.Div([
-                html.H1("IDB Options Pricer"),
-                html.P("Equity Derivatives Structure Pricing Tool"),
+                html.H1("IDB Options Pricer",
+                         style={"fontSize": FONT_SIZE_H1, "fontWeight": WEIGHT_SEMIBOLD,
+                                "margin": "0"}),
+                html.P("Equity Derivatives Structure Pricing Tool",
+                         style={"color": TEXT_SECONDARY, "fontSize": FONT_SIZE_BASE,
+                                "margin": f"{SPACE_SM} 0 0 0"}),
             ]),
             html.Div(
                 style={"display": "flex", "alignItems": "center", "gap": "10px"},
@@ -145,21 +266,16 @@ def create_header(initial_source="Mock Data"):
                         id="toggle-data-source-btn",
                         n_clicks=0,
                         style={
-                            "padding": "4px 10px",
-                            "fontSize": "11px",
-                            "backgroundColor": "#333",
-                            "color": "#aaa",
-                            "border": "1px solid #555",
-                            "borderRadius": "4px",
-                            "cursor": "pointer",
+                            **_ACTION_BTN,
+                            "fontSize": FONT_SIZE_SM,
                         },
                     ),
                     html.Div(
                         id="data-source-error",
                         style={
-                            "color": "#ff4444",
-                            "fontSize": "12px",
-                            "fontFamily": "monospace",
+                            "color": RED_PRIMARY,
+                            "fontSize": FONT_SIZE_BASE,
+                            "fontFamily": FONT_MONO,
                         },
                     ),
                 ],
@@ -171,9 +287,11 @@ def create_header(initial_source="Mock Data"):
 def create_order_input():
     return html.Div(
         className="order-input",
-        style={"marginBottom": "20px"},
+        style={"marginBottom": SPACE_XXL},
         children=[
-            html.H3("Paste Order"),
+            html.H3("Paste Order",
+                     style={"fontSize": FONT_SIZE_H3, "fontWeight": WEIGHT_SEMIBOLD,
+                            "margin": f"0 0 {SPACE_MD} 0"}),
             dcc.Textarea(
                 id="order-text",
                 placeholder='e.g. AAPL Jun26 240/220 PS 1X2 vs250 15d 500x @ 3.50 1X over',
@@ -181,12 +299,12 @@ def create_order_input():
                     "width": "100%",
                     "boxSizing": "border-box",
                     "padding": "14px",
-                    "fontSize": "16px",
-                    "fontFamily": "monospace",
-                    "backgroundColor": "#1a1a2e",
-                    "color": "#00d4ff",
-                    "border": "1px solid #333",
-                    "borderRadius": "4px",
+                    "fontSize": FONT_SIZE_LG,
+                    "fontFamily": FONT_MONO,
+                    "backgroundColor": BG_ELEVATED,
+                    "color": ACCENT,
+                    "border": f"1px solid {BORDER_DEFAULT}",
+                    "borderRadius": RADIUS_MD,
                     "minHeight": "80px",
                     "resize": "vertical",
                     "lineHeight": "1.5",
@@ -201,15 +319,20 @@ def create_order_input():
                 style={
                     "marginTop": "10px",
                     "padding": "10px 30px",
-                    "fontSize": "16px",
-                    "backgroundColor": "#0d6efd",
+                    "fontSize": FONT_SIZE_LG,
+                    "backgroundColor": ACCENT,
                     "color": "white",
                     "border": "none",
-                    "borderRadius": "4px",
+                    "borderRadius": RADIUS_MD,
                     "cursor": "pointer",
+                    "fontWeight": WEIGHT_SEMIBOLD,
+                    "fontFamily": FONT_BODY,
+                    "letterSpacing": "0.3px",
                 },
             ),
-            html.Div(id="parse-error", style={"color": "#ff4444", "marginTop": "8px"}),
+            html.Div(id="parse-error",
+                     style={"color": RED_PRIMARY, "marginTop": SPACE_MD,
+                            "fontFamily": FONT_MONO, "fontSize": FONT_SIZE_DATA}),
         ],
     )
 
@@ -219,7 +342,7 @@ def create_pricer_toolbar():
     toolbar_row = html.Div(
         style={
             "display": "flex",
-            "gap": "15px",
+            "gap": SPACE_LG,
             "alignItems": "flex-end",
             "flexWrap": "wrap",
         },
@@ -245,7 +368,7 @@ def create_pricer_toolbar():
                 html.Div("Tie", style=_LABEL_STYLE),
                 dcc.Input(
                     id="manual-stock-ref", type="number",
-                    placeholder="0.00",
+                    placeholder="0.00", debounce=True,
                     style={**_INPUT_STYLE, "width": "90px"},
                 ),
             ]),
@@ -253,7 +376,7 @@ def create_pricer_toolbar():
                 html.Div("Delta", style=_LABEL_STYLE),
                 dcc.Input(
                     id="manual-delta", type="number",
-                    placeholder="0",
+                    placeholder="0", debounce=True,
                     style={**_INPUT_STYLE, "width": "70px"},
                 ),
             ]),
@@ -261,7 +384,7 @@ def create_pricer_toolbar():
                 html.Div("Order Price", style=_LABEL_STYLE),
                 dcc.Input(
                     id="manual-broker-price", type="number",
-                    placeholder="0.00",
+                    placeholder="0.00", debounce=True,
                     style={**_INPUT_STYLE, "width": "90px"},
                 ),
             ]),
@@ -282,7 +405,7 @@ def create_pricer_toolbar():
                 html.Div("Size", style=_LABEL_STYLE),
                 dcc.Input(
                     id="manual-quantity", type="number",
-                    placeholder="Size", value=None,
+                    placeholder="Size", value=None, debounce=True,
                     style={**_INPUT_STYLE, "width": "80px"},
                 ),
             ]),
@@ -293,14 +416,15 @@ def create_pricer_toolbar():
                     id="add-order-btn",
                     n_clicks=0,
                     style={
-                        "padding": "8px 20px",
-                        "backgroundColor": "#198754",
+                        "padding": f"{SPACE_MD} {SPACE_XXL}",
+                        "backgroundColor": STATUS_LIVE,
                         "color": "white",
                         "border": "none",
-                        "borderRadius": "4px",
+                        "borderRadius": RADIUS_MD,
                         "cursor": "pointer",
-                        "fontSize": "13px",
-                        "fontFamily": "monospace",
+                        "fontSize": FONT_SIZE_DATA,
+                        "fontFamily": FONT_MONO,
+                        "fontWeight": WEIGHT_SEMIBOLD,
                     },
                 ),
             ]),
@@ -308,19 +432,19 @@ def create_pricer_toolbar():
     )
     return html.Div(
         style={
-            "backgroundColor": "#1a1a2e",
-            "padding": "12px 20px",
-            "borderRadius": "6px 6px 0 0",
+            "backgroundColor": BG_SURFACE,
+            "padding": f"{SPACE_LG} {SPACE_XXL}",
+            "borderRadius": f"{RADIUS_LG} {RADIUS_LG} 0 0",
         },
         children=[
             toolbar_row,
             html.Div(
                 id="order-error",
                 style={
-                    "color": "#ff4444",
-                    "fontFamily": "monospace",
-                    "fontSize": "13px",
-                    "marginTop": "6px",
+                    "color": RED_PRIMARY,
+                    "fontFamily": FONT_MONO,
+                    "fontSize": FONT_SIZE_DATA,
+                    "marginTop": SPACE_SM,
                 },
             ),
         ],
@@ -357,68 +481,85 @@ def create_pricing_table():
                 },
                 style_table={"overflowX": "auto"},
                 style_cell={
-                    "textAlign": "center",
-                    "padding": "8px 10px",
-                    "fontFamily": "monospace",
-                    "fontSize": "13px",
+                    "textAlign": "right",
+                    "padding": CELL_PADDING,
+                    "fontFamily": FONT_MONO,
+                    "fontSize": FONT_SIZE_DATA,
+                    "fontFeatureSettings": "'tnum' 1, 'lnum' 1",
+                    "border": "none",
                 },
                 style_header={
-                    "backgroundColor": "#1a1a2e",
-                    "color": "#aaa",
-                    "fontWeight": "bold",
-                    "borderBottom": "2px solid #333",
+                    "backgroundColor": BG_SURFACE,
+                    "color": TEXT_SECONDARY,
+                    "fontWeight": WEIGHT_SEMIBOLD,
+                    "fontFamily": FONT_BODY,
+                    "fontSize": FONT_SIZE_BASE,
+                    "textTransform": "uppercase",
+                    "letterSpacing": "0.5px",
+                    "borderBottom": f"1px solid {BORDER_DEFAULT}",
+                    "padding": CELL_PADDING_HEADER,
+                    "textAlign": "right",
                 },
                 style_data={
-                    "backgroundColor": "#16213e",
-                    "color": "#e0e0e0",
-                    "borderBottom": "1px solid #1a1a2e",
+                    "backgroundColor": BG_ELEVATED,
+                    "color": TEXT_PRIMARY,
+                    "borderBottom": f"1px solid {BORDER_SUBTLE}",
                 },
                 style_cell_conditional=[
                     # Input columns get a slightly lighter background
                     {
                         "if": {"column_id": ["expiry", "strike", "type", "ratio"]},
-                        "backgroundColor": "#1c2a4a",
+                        "backgroundColor": BG_EDITABLE,
                     },
-                    # Leg column narrower
-                    {"if": {"column_id": "leg"}, "width": "70px"},
-                    {"if": {"column_id": "expiry"}, "width": "80px"},
-                    {"if": {"column_id": "ratio"}, "width": "60px"},
+                    # Leg column: left-align, fixed width
+                    {"if": {"column_id": "leg"}, "width": "65px", "textAlign": "left"},
+                    {"if": {"column_id": "expiry"}, "width": "75px", "textAlign": "center"},
+                    {"if": {"column_id": "type"}, "width": "55px", "textAlign": "center"},
+                    {"if": {"column_id": "ratio"}, "width": "55px", "textAlign": "center"},
+                    {"if": {"column_id": "strike"}, "width": "80px"},
+                    # Mid column emphasized (slightly larger, bolder)
+                    {
+                        "if": {"column_id": "mid"},
+                        "fontWeight": WEIGHT_BOLD,
+                        "fontSize": FONT_SIZE_MD,
+                    },
                 ],
                 style_data_conditional=[
                     # Color-coded pricing columns
-                    {"if": {"column_id": "bid"}, "color": "#00ff88"},
-                    {"if": {"column_id": "offer"}, "color": "#ff6b6b"},
+                    {"if": {"column_id": "bid"}, "color": GREEN_PRIMARY},
+                    {"if": {"column_id": "offer"}, "color": RED_PRIMARY},
                     # Signed ratio: positive (buy) green, negative (sell) red
                     {
                         "if": {
                             "filter_query": "{ratio} > 0",
                             "column_id": "ratio",
                         },
-                        "color": "#00ff88",
-                        "fontWeight": "bold",
+                        "color": GREEN_PRIMARY,
+                        "fontWeight": WEIGHT_BOLD,
                     },
                     {
                         "if": {
                             "filter_query": "{ratio} < 0",
                             "column_id": "ratio",
                         },
-                        "color": "#ff4444",
-                        "fontWeight": "bold",
+                        "color": RED_PRIMARY,
+                        "fontWeight": WEIGHT_BOLD,
                     },
-                    # Structure summary row (last — overrides column colors)
+                    # Structure summary row — HIGHEST VISUAL PRIORITY
                     {
                         "if": {"filter_query": '{leg} = "Structure"'},
-                        "backgroundColor": "#0f3460",
-                        "fontWeight": "bold",
-                        "borderTop": "2px solid #00d4ff",
-                        "color": "#00d4ff",
+                        "backgroundColor": BG_STRUCTURE,
+                        "fontWeight": WEIGHT_BOLD,
+                        "borderTop": f"2px solid {ACCENT_DIM}",
+                        "color": ACCENT,
+                        "fontSize": "15px",
                     },
-                    # Failed quote indicator (greyed italic --)
-                    {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{bid_size} = "--"', "column_id": "bid_size"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{offer_size} = "--"', "column_id": "offer_size"}, "color": "#666", "fontStyle": "italic"},
+                    # Failed quote indicator (stale/unavailable data)
+                    {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": TEXT_STALE, "fontStyle": "italic"},
+                    {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": TEXT_STALE, "fontStyle": "italic"},
+                    {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": TEXT_STALE, "fontStyle": "italic"},
+                    {"if": {"filter_query": '{bid_size} = "--"', "column_id": "bid_size"}, "color": TEXT_STALE, "fontStyle": "italic"},
+                    {"if": {"filter_query": '{offer_size} = "--"', "column_id": "offer_size"}, "color": TEXT_STALE, "fontStyle": "italic"},
                 ],
             ),
             # Action row below table
@@ -427,50 +568,21 @@ def create_pricing_table():
                     "display": "flex",
                     "gap": "10px",
                     "alignItems": "center",
-                    "marginTop": "10px",
+                    "marginTop": SPACE_MD,
                     "flexWrap": "wrap",
                 },
                 children=[
-                    html.Button(
-                        "+ Row", id="add-row-btn", n_clicks=0,
-                        style={
-                            "padding": "4px 14px", "fontSize": "12px",
-                            "backgroundColor": "#333", "color": "#aaa",
-                            "border": "1px solid #555", "borderRadius": "4px",
-                            "cursor": "pointer",
-                        },
-                    ),
-                    html.Button(
-                        "- Row", id="remove-row-btn", n_clicks=0,
-                        style={
-                            "padding": "4px 14px", "fontSize": "12px",
-                            "backgroundColor": "#333", "color": "#aaa",
-                            "border": "1px solid #555", "borderRadius": "4px",
-                            "cursor": "pointer",
-                        },
-                    ),
+                    html.Button("+ Row", id="add-row-btn", n_clicks=0, style=_ACTION_BTN),
+                    html.Button("- Row", id="remove-row-btn", n_clicks=0, style=_ACTION_BTN),
                     html.Button(
                         "Flip", id="flip-btn", n_clicks=0,
                         title="Invert all ratios and flip delta",
-                        style={
-                            "padding": "4px 14px", "fontSize": "12px",
-                            "backgroundColor": "#333", "color": "#aaa",
-                            "border": "1px solid #555", "borderRadius": "4px",
-                            "cursor": "pointer",
-                        },
+                        style=_ACTION_BTN,
                     ),
-                    html.Button(
-                        "Clear", id="clear-btn", n_clicks=0,
-                        style={
-                            "padding": "4px 14px", "fontSize": "12px",
-                            "backgroundColor": "#8b0000", "color": "#e0e0e0",
-                            "border": "1px solid #aa3333", "borderRadius": "4px",
-                            "cursor": "pointer", "marginLeft": "10px",
-                        },
-                    ),
+                    html.Button("Clear", id="clear-btn", n_clicks=0, style=_CLEAR_BTN),
                     html.Div(
                         id="table-error",
-                        style={"color": "#ff4444", "fontFamily": "monospace", "fontSize": "13px"},
+                        style={"color": RED_PRIMARY, "fontFamily": FONT_MONO, "fontSize": FONT_SIZE_DATA},
                     ),
                 ],
             ),
@@ -483,11 +595,12 @@ def create_order_header():
     return html.Div(
         id="order-header",
         style={
-            "backgroundColor": "#1a1a2e",
-            "padding": "12px 20px",
-            "borderRadius": "6px",
+            "backgroundColor": BG_SURFACE,
+            "padding": f"{SPACE_LG} {SPACE_XXL}",
+            "borderRadius": RADIUS_LG,
             "marginBottom": "15px",
             "display": "none",
+            "borderLeft": f"3px solid {ACCENT}",
         },
         children=[
             html.Div(
@@ -496,8 +609,9 @@ def create_order_header():
                     "display": "flex",
                     "gap": "30px",
                     "fontSize": "15px",
-                    "fontFamily": "monospace",
+                    "fontFamily": FONT_MONO,
                     "flexWrap": "wrap",
+                    "alignItems": "baseline",
                 },
             ),
         ],
@@ -509,14 +623,14 @@ def create_broker_quote():
     return html.Div(
         id="broker-quote-section",
         style={
-            "backgroundColor": "#1a1a2e",
-            "padding": "15px 20px",
-            "borderRadius": "6px",
+            "backgroundColor": BG_SURFACE,
+            "padding": f"15px {SPACE_XXL}",
+            "borderRadius": RADIUS_LG,
             "marginTop": "15px",
             "display": "none",
         },
         children=[
-            html.Div(id="broker-quote-content", style={"fontFamily": "monospace"}),
+            html.Div(id="broker-quote-content", style={"fontFamily": FONT_MONO}),
         ],
     )
 
@@ -570,22 +684,29 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
         fixed_rows={"headers": True},
         style_cell={
             "textAlign": "center",
-            "padding": "10px 14px",
-            "fontFamily": "monospace",
-            "fontSize": "13px",
+            "padding": CELL_PADDING_BLOTTER,
+            "fontFamily": FONT_MONO,
+            "fontSize": FONT_SIZE_DATA,
+            "fontFeatureSettings": "'tnum' 1, 'lnum' 1",
             "cursor": "pointer",
+            "border": "none",
         },
         style_header={
-            "backgroundColor": "#1a1a2e",
-            "color": "#aaa",
-            "fontWeight": "bold",
-            "borderBottom": "2px solid #333",
+            "backgroundColor": BG_SURFACE,
+            "color": TEXT_SECONDARY,
+            "fontWeight": WEIGHT_SEMIBOLD,
+            "fontFamily": FONT_BODY,
+            "fontSize": FONT_SIZE_BASE,
+            "textTransform": "uppercase",
+            "letterSpacing": "0.5px",
+            "borderBottom": f"1px solid {BORDER_DEFAULT}",
             "cursor": "default",
+            "padding": CELL_PADDING_HEADER,
         },
         style_data={
-            "backgroundColor": "#16213e",
-            "color": "#e0e0e0",
-            "borderBottom": "1px solid #1a1a2e",
+            "backgroundColor": BG_ELEVATED,
+            "color": TEXT_PRIMARY,
+            "borderBottom": f"1px solid {BORDER_SUBTLE}",
         },
         style_cell_conditional=[
             # Editable columns get lighter background
@@ -594,7 +715,27 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                     "side", "size", "traded", "bought_sold",
                     "traded_price", "initiator",
                 ]},
-                "backgroundColor": "#1c2a4a",
+                "backgroundColor": BG_EDITABLE,
+            },
+            # Right-align numeric columns
+            {
+                "if": {"column_id": [
+                    "bid", "mid", "offer", "bid_size", "offer_size",
+                    "traded_price", "pnl", "size",
+                ]},
+                "textAlign": "right",
+            },
+            # Mid column emphasized
+            {
+                "if": {"column_id": "mid"},
+                "fontWeight": WEIGHT_BOLD,
+            },
+            # ID column: compact, left-aligned, smaller font
+            {
+                "if": {"column_id": "id"},
+                "width": "80px",
+                "textAlign": "left",
+                "fontSize": "11px",
             },
         ],
         style_data_conditional=[
@@ -604,16 +745,16 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                     "filter_query": '{side} = "Bid"',
                     "column_id": "side",
                 },
-                "color": "#00ff88",
-                "fontWeight": "bold",
+                "color": GREEN_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             {
                 "if": {
                     "filter_query": '{side} = "Offered"',
                     "column_id": "side",
                 },
-                "color": "#ff4444",
-                "fontWeight": "bold",
+                "color": RED_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             # Bought/Sold coloring
             {
@@ -621,16 +762,16 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                     "filter_query": '{bought_sold} = "Bought"',
                     "column_id": "bought_sold",
                 },
-                "color": "#00ff88",
-                "fontWeight": "bold",
+                "color": GREEN_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             {
                 "if": {
                     "filter_query": '{bought_sold} = "Sold"',
                     "column_id": "bought_sold",
                 },
-                "color": "#ff4444",
-                "fontWeight": "bold",
+                "color": RED_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             # PnL coloring
             {
@@ -638,27 +779,27 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                     "filter_query": "{pnl} contains '-'",
                     "column_id": "pnl",
                 },
-                "color": "#ff4444",
-                "fontWeight": "bold",
+                "color": RED_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             {
                 "if": {
                     "filter_query": "{pnl} contains '+'",
                     "column_id": "pnl",
                 },
-                "color": "#00ff88",
-                "fontWeight": "bold",
+                "color": GREEN_PRIMARY,
+                "fontWeight": WEIGHT_BOLD,
             },
             # Active row highlight
             {
                 "if": {"state": "active"},
-                "backgroundColor": "#1a3a5e",
-                "border": "1px solid #00d4ff",
+                "backgroundColor": BG_HOVER,
+                "border": f"1px solid {BORDER_FOCUS}",
             },
-            # Failed quote indicator (greyed italic --)
-            {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
-            {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
-            {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
+            # Failed quote indicator (stale/unavailable data)
+            {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": TEXT_STALE, "fontStyle": "italic"},
+            {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": TEXT_STALE, "fontStyle": "italic"},
+            {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": TEXT_STALE, "fontStyle": "italic"},
         ],
     )
 
@@ -671,8 +812,8 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                 "height": "280px",
                 "minHeight": "120px",
                 "maxHeight": "80vh",
-                "border": "1px solid #333",
-                "borderRadius": "4px",
+                "border": f"1px solid {BORDER_DEFAULT}",
+                "borderRadius": RADIUS_MD,
             },
             children=[table],
         )
@@ -686,10 +827,10 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
             options=[{"label": " Select all", "value": "all"}],
             value=[],
             style={
-                "marginTop": "8px",
-                "fontFamily": "monospace",
-                "fontSize": "12px",
-                "color": "#aaa",
+                "marginTop": SPACE_MD,
+                "fontFamily": FONT_MONO,
+                "fontSize": FONT_SIZE_BASE,
+                "color": TEXT_SECONDARY,
             },
             inputStyle={"marginRight": "6px"},
         )
@@ -706,21 +847,15 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                 "marginBottom": "6px",
             },
             children=[
-                html.H3("Order Blotter", style={"margin": "0"}),
+                html.H3("Order Blotter",
+                         style={"margin": "0", "fontSize": FONT_SIZE_H3,
+                                "fontWeight": WEIGHT_SEMIBOLD}),
                 html.Button(
                     "Columns",
                     id="column-toggle-btn",
                     n_clicks=0,
                     title="Show/hide blotter columns",
-                    style={
-                        "padding": "4px 10px",
-                        "fontSize": "12px",
-                        "backgroundColor": "#333",
-                        "color": "#aaa",
-                        "border": "1px solid #555",
-                        "borderRadius": "4px",
-                        "cursor": "pointer",
-                    },
+                    style={**_ACTION_BTN, "fontSize": FONT_SIZE_SM},
                 ),
             ],
         ),
@@ -728,7 +863,7 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
             "Click a row to recall into pricer. Edit cells directly to update order status."
             if show_recall_hint
             else "Edit cells directly to update order status. Changes sync across dashboards.",
-            style={"color": "#666", "fontSize": "11px", "margin": "0 0 6px 0"},
+            style={"color": TEXT_TERTIARY, "fontSize": FONT_SIZE_SM, "margin": "0 0 6px 0"},
         ),
         # Column toggle panel (hidden by default)
         html.Div(
@@ -745,14 +880,14 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
                     style={
                         "display": "flex",
                         "flexWrap": "wrap",
-                        "gap": "8px",
+                        "gap": SPACE_MD,
                         "padding": "10px",
-                        "backgroundColor": "#1a1a2e",
-                        "borderRadius": "4px",
-                        "fontFamily": "monospace",
-                        "fontSize": "12px",
-                        "color": "#aaa",
-                        "marginBottom": "8px",
+                        "backgroundColor": BG_SURFACE,
+                        "borderRadius": RADIUS_MD,
+                        "fontFamily": FONT_MONO,
+                        "fontSize": FONT_SIZE_BASE,
+                        "color": TEXT_SECONDARY,
+                        "marginBottom": SPACE_MD,
                     },
                     inputStyle={"marginRight": "4px"},
                 ),
@@ -769,7 +904,7 @@ def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=Fal
 
     return html.Div(
         className="order-blotter",
-        style={"marginTop": "20px"},
+        style={"marginTop": SPACE_XXL},
         children=children,
     )
 
@@ -787,14 +922,15 @@ def create_layout(data_source="Mock Data"):
 
     return html.Div(
         style={
-            "fontFamily": "'Segoe UI', Tahoma, sans-serif",
-            "backgroundColor": "#0f0f23",
-            "color": "#e0e0e0",
+            "fontFamily": FONT_BODY,
+            "backgroundColor": BG_ROOT,
+            "color": TEXT_PRIMARY,
             "minHeight": "100vh",
-            "padding": "20px 20px 80px 20px",
+            "padding": f"{SPACE_XXL} {SPACE_XXL} 80px {SPACE_XXL}",
             "maxWidth": "1400px",
             "margin": "0 auto",
             "boxSizing": "border-box",
+            "lineHeight": "1.4",
         },
         children=[
             # Session data stores
@@ -803,6 +939,7 @@ def create_layout(data_source="Mock Data"):
             dcc.Store(id="suppress-template", data=False),
             dcc.Store(id="auto-price-suppress", data=False),
             dcc.Store(id="blotter-edit-suppress", data=False),
+            dcc.Store(id="blotter-interaction-ts", data=0),
             # Polling infrastructure for cross-dashboard sync
             dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
             dcc.Store(id="file-mtime", data=current_mtime),
@@ -814,14 +951,14 @@ def create_layout(data_source="Mock Data"):
             dcc.Store(id="bloomberg-health", data="ok"),
             create_header(initial_source=data_source),
             html.Div(id="bloomberg-health-alert", style={"display": "none"}),
-            html.Hr(style={"borderColor": "#333"}),
+            html.Hr(style={"borderColor": BORDER_DEFAULT}),
             create_order_input(),
             # Toolbar + table grouped as one card
             html.Div(
                 style={
-                    "backgroundColor": "#16213e",
-                    "borderRadius": "8px",
-                    "border": "1px solid #333",
+                    "backgroundColor": BG_ELEVATED,
+                    "borderRadius": RADIUS_LG,
+                    "border": f"1px solid {BORDER_DEFAULT}",
                     "overflow": "visible",
                 },
                 children=[
@@ -832,7 +969,7 @@ def create_layout(data_source="Mock Data"):
             create_order_header(),
             create_broker_quote(),
             create_order_input_section(),
-            html.Hr(style={"borderColor": "#333", "marginTop": "20px"}),
+            html.Hr(style={"borderColor": BORDER_DEFAULT, "marginTop": SPACE_XXL}),
             create_order_blotter(initial_data=blotter_data),
         ],
     )
@@ -851,32 +988,37 @@ def create_blotter_layout():
 
     return html.Div(
         style={
-            "fontFamily": "'Segoe UI', Tahoma, sans-serif",
-            "backgroundColor": "#0f0f23",
-            "color": "#e0e0e0",
+            "fontFamily": FONT_BODY,
+            "backgroundColor": BG_ROOT,
+            "color": TEXT_PRIMARY,
             "minHeight": "100vh",
-            "padding": "20px 20px 80px 20px",
+            "padding": f"{SPACE_XXL} {SPACE_XXL} 80px {SPACE_XXL}",
             "maxWidth": "1400px",
             "margin": "0 auto",
             "boxSizing": "border-box",
+            "lineHeight": "1.4",
         },
         children=[
             # Session data stores
             dcc.Store(id="order-store", data=orders),
             dcc.Store(id="blotter-edit-suppress", data=False),
+            dcc.Store(id="blotter-interaction-ts", data=0),
             # Polling infrastructure for cross-dashboard sync
             dcc.Interval(id="poll-interval", interval=2000, n_intervals=0),
             dcc.Store(id="file-mtime", data=current_mtime),
             dcc.Store(id="last-write-time", data=current_mtime),
             # Header
             html.Div(children=[
-                html.H1("Admin Dashboard", style={"margin": "0"}),
+                html.H1("Admin Dashboard",
+                         style={"margin": "0", "fontSize": FONT_SIZE_H1,
+                                "fontWeight": WEIGHT_SEMIBOLD}),
                 html.P(
                     "Order blotter \u2014 edits sync with the pricer dashboard",
-                    style={"color": "#666", "fontSize": "12px", "margin": "4px 0 0 0"},
+                    style={"color": TEXT_TERTIARY, "fontSize": FONT_SIZE_BASE,
+                           "margin": f"{SPACE_SM} 0 0 0"},
                 ),
             ]),
-            html.Hr(style={"borderColor": "#333"}),
+            html.Hr(style={"borderColor": BORDER_DEFAULT}),
             # Blotter
             create_order_blotter(initial_data=blotter_data, show_recall_hint=False, resizable=True, selectable=True),
         ],

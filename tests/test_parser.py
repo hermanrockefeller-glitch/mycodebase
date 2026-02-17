@@ -512,3 +512,17 @@ class TestParseOrderStupid:
     def test_call_stupid_delta_sign(self):
         order = parse_order("AAPL Jun26 260 270 call stupid vs265 25d 300x")
         assert order.delta == 25.0  # call stupid → positive delta
+
+
+class TestLiveTieConflict:
+    def test_live_with_tie_raises(self):
+        """'live' + stock tie is contradictory — should raise."""
+        with pytest.raises(ValueError, match="live.*tied"):
+            parse_order("MU may 420 Call live vs420 40d 500x at 50.00")
+
+    def test_live_without_tie_ok(self):
+        """'live' without a tie is fine — delta and stock_ref zeroed."""
+        order = parse_order("MU may 420 Call live 500x at 50.00")
+        assert order.stock_ref == 0.0
+        assert order.delta == 0.0
+        assert order.quantity == 500
