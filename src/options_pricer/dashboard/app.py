@@ -320,10 +320,10 @@ def _build_table_data(order, leg_market, struct_data):
             "bid_size": "--", "bid": "--", "mid": "--", "offer": "--", "offer_size": "--",
         })
     else:
-        # Structure summary row — display absolute values, bid <= offer
-        disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-        disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-        disp_mid = (disp_bid + disp_offer) / 2.0
+        # Structure summary row — struct_bid <= struct_offer by construction
+        disp_bid = struct_data.structure_bid
+        disp_offer = struct_data.structure_offer
+        disp_mid = struct_data.structure_mid
 
         rows.append({
             "leg": "Structure",
@@ -367,10 +367,10 @@ def _build_header_and_extras(order, spot, struct_data, multiplier, leg_market=No
         disp_mid = None
         disp_offer = None
     else:
-        # Compute display-safe absolute prices with bid <= offer
-        disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-        disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-        disp_mid = (disp_bid + disp_offer) / 2.0
+        # struct_bid <= struct_offer by construction
+        disp_bid = struct_data.structure_bid
+        disp_offer = struct_data.structure_offer
+        disp_mid = struct_data.structure_mid
 
     broker_style = _HIDDEN
     broker_content = []
@@ -999,6 +999,7 @@ register_blotter_callbacks()
 
 @callback(
     Output("order-store", "data", allow_duplicate=True),
+    Output("last-write-time", "data", allow_duplicate=True),
     Input("live-refresh-interval", "n_intervals"),
     State("order-store", "data"),
     State("blotter-table", "data"),
@@ -1007,14 +1008,12 @@ register_blotter_callbacks()
 def refresh_blotter_prices(n_intervals, orders, blotter_data):
     """Re-price every blotter order from live market data each tick.
 
-    Updates the client-side order store only.  Does NOT write to the JSON
-    file or update blotter-table.data — both of those would reset DataTable
-    editing state or trigger the poll callback to do a full table replace.
-    The blotter table displays the prices from when the order was added;
-    recalling an order into the pricer always fetches live prices.
+    Updates the client-side order store and persists to JSON so the Admin
+    Dashboard can pick up fresh prices via file polling.  Stamps
+    last-write-time so the pricer's own poll callback skips reloading.
     """
     if not orders:
-        return no_update
+        return no_update, no_update
 
     # Merge pending manual edits from the blotter display so they aren't
     # lost when the store is written back.
@@ -1066,7 +1065,7 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data):
             )
 
     if not order_legs:
-        return no_update
+        return no_update, no_update
 
     # Batch fetch: each unique spot / quote / multiplier fetched once
     spot_cache = {}
@@ -1120,9 +1119,9 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data):
                 disp_mid = None
                 disp_offer = None
             else:
-                disp_bid = min(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-                disp_offer = max(abs(struct_data.structure_bid), abs(struct_data.structure_offer))
-                disp_mid = (disp_bid + disp_offer) / 2.0
+                disp_bid = struct_data.structure_bid
+                disp_offer = struct_data.structure_offer
+                disp_mid = struct_data.structure_mid
 
                 # Update display fields (pricing only — manual fields untouched)
                 order["bid"] = f"{disp_bid:.2f}"
@@ -1158,10 +1157,12 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data):
         changed = True
 
     if not changed:
-        return no_update
+        return no_update, no_update
 
-    # Only update the client-side store — no file write, no table update.
-    return orders
+    # Persist to JSON so the Admin Dashboard picks up fresh prices via polling.
+    save_orders_locked(orders)
+    new_mtime = get_orders_mtime()
+    return orders, new_mtime
 
 
 # ---------------------------------------------------------------------------

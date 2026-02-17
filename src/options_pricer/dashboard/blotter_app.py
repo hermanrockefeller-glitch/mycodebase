@@ -10,7 +10,7 @@ from .callbacks import register_blotter_callbacks
 from .layouts import create_blotter_layout
 
 app = Dash(__name__, suppress_callback_exceptions=True)
-app.title = "Order Blotter"
+app.title = "Admin Dashboard"
 app.layout = create_blotter_layout
 
 # Register the shared blotter callbacks (poll, sync edits, column toggle, column visibility)

@@ -533,200 +533,244 @@ def create_order_input_section():
     )
 
 
-def create_order_blotter(initial_data=None, show_recall_hint=True):
+def create_order_blotter(initial_data=None, show_recall_hint=True, resizable=False, selectable=False):
     """Order blotter table — library of all priced structures."""
     visible_cols = [c for c in _BLOTTER_COLUMNS if c["id"] in _DEFAULT_VISIBLE]
+
+    table = dash_table.DataTable(
+        id="blotter-table",
+        columns=visible_cols,
+        data=initial_data or [],
+        row_selectable="multi" if selectable else False,
+        selected_rows=[],
+        dropdown={
+            "side": {
+                "options": [
+                    {"label": "Bid", "value": "Bid"},
+                    {"label": "Offered", "value": "Offered"},
+                ],
+            },
+            "traded": {
+                "options": [
+                    {"label": "Yes", "value": "Yes"},
+                    {"label": "No", "value": "No"},
+                ],
+            },
+            "bought_sold": {
+                "options": [
+                    {"label": "Bought", "value": "Bought"},
+                    {"label": "Sold", "value": "Sold"},
+                    {"label": "-", "value": ""},
+                ],
+            },
+        },
+        sort_action="native",
+        sort_by=[{"column_id": "added_time", "direction": "desc"}],
+        style_table={"overflowX": "auto", "overflowY": "auto"},
+        fixed_rows={"headers": True},
+        style_cell={
+            "textAlign": "center",
+            "padding": "10px 14px",
+            "fontFamily": "monospace",
+            "fontSize": "13px",
+            "cursor": "pointer",
+        },
+        style_header={
+            "backgroundColor": "#1a1a2e",
+            "color": "#aaa",
+            "fontWeight": "bold",
+            "borderBottom": "2px solid #333",
+            "cursor": "default",
+        },
+        style_data={
+            "backgroundColor": "#16213e",
+            "color": "#e0e0e0",
+            "borderBottom": "1px solid #1a1a2e",
+        },
+        style_cell_conditional=[
+            # Editable columns get lighter background
+            {
+                "if": {"column_id": [
+                    "side", "size", "traded", "bought_sold",
+                    "traded_price", "initiator",
+                ]},
+                "backgroundColor": "#1c2a4a",
+            },
+        ],
+        style_data_conditional=[
+            # Bid/Offered coloring
+            {
+                "if": {
+                    "filter_query": '{side} = "Bid"',
+                    "column_id": "side",
+                },
+                "color": "#00ff88",
+                "fontWeight": "bold",
+            },
+            {
+                "if": {
+                    "filter_query": '{side} = "Offered"',
+                    "column_id": "side",
+                },
+                "color": "#ff4444",
+                "fontWeight": "bold",
+            },
+            # Bought/Sold coloring
+            {
+                "if": {
+                    "filter_query": '{bought_sold} = "Bought"',
+                    "column_id": "bought_sold",
+                },
+                "color": "#00ff88",
+                "fontWeight": "bold",
+            },
+            {
+                "if": {
+                    "filter_query": '{bought_sold} = "Sold"',
+                    "column_id": "bought_sold",
+                },
+                "color": "#ff4444",
+                "fontWeight": "bold",
+            },
+            # PnL coloring
+            {
+                "if": {
+                    "filter_query": "{pnl} contains '-'",
+                    "column_id": "pnl",
+                },
+                "color": "#ff4444",
+                "fontWeight": "bold",
+            },
+            {
+                "if": {
+                    "filter_query": "{pnl} contains '+'",
+                    "column_id": "pnl",
+                },
+                "color": "#00ff88",
+                "fontWeight": "bold",
+            },
+            # Active row highlight
+            {
+                "if": {"state": "active"},
+                "backgroundColor": "#1a3a5e",
+                "border": "1px solid #00d4ff",
+            },
+            # Failed quote indicator (greyed italic --)
+            {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
+            {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
+            {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
+        ],
+    )
+
+    # Wrap table in a resizable container for the Admin Dashboard
+    if resizable:
+        table_section = html.Div(
+            style={
+                "resize": "vertical",
+                "overflow": "auto",
+                "height": "280px",
+                "minHeight": "120px",
+                "maxHeight": "80vh",
+                "border": "1px solid #333",
+                "borderRadius": "4px",
+            },
+            children=[table],
+        )
+    else:
+        table_section = table
+
+    # Select all / deselect all control (Admin Dashboard only)
+    if selectable:
+        select_all_control = dcc.Checklist(
+            id="blotter-select-all",
+            options=[{"label": " Select all", "value": "all"}],
+            value=[],
+            style={
+                "marginTop": "8px",
+                "fontFamily": "monospace",
+                "fontSize": "12px",
+                "color": "#aaa",
+            },
+            inputStyle={"marginRight": "6px"},
+        )
+    else:
+        select_all_control = None
+
+    children = [
+        # Title row with column toggle
+        html.Div(
+            style={
+                "display": "flex",
+                "alignItems": "center",
+                "gap": "10px",
+                "marginBottom": "6px",
+            },
+            children=[
+                html.H3("Order Blotter", style={"margin": "0"}),
+                html.Button(
+                    "Columns",
+                    id="column-toggle-btn",
+                    n_clicks=0,
+                    title="Show/hide blotter columns",
+                    style={
+                        "padding": "4px 10px",
+                        "fontSize": "12px",
+                        "backgroundColor": "#333",
+                        "color": "#aaa",
+                        "border": "1px solid #555",
+                        "borderRadius": "4px",
+                        "cursor": "pointer",
+                    },
+                ),
+            ],
+        ),
+        html.P(
+            "Click a row to recall into pricer. Edit cells directly to update order status."
+            if show_recall_hint
+            else "Edit cells directly to update order status. Changes sync across dashboards.",
+            style={"color": "#666", "fontSize": "11px", "margin": "0 0 6px 0"},
+        ),
+        # Column toggle panel (hidden by default)
+        html.Div(
+            id="column-toggle-panel",
+            style={"display": "none"},
+            children=[
+                dcc.Checklist(
+                    id="column-checklist",
+                    options=[
+                        {"label": c["name"], "value": c["id"]}
+                        for c in _BLOTTER_COLUMNS
+                    ],
+                    value=_DEFAULT_VISIBLE,
+                    style={
+                        "display": "flex",
+                        "flexWrap": "wrap",
+                        "gap": "8px",
+                        "padding": "10px",
+                        "backgroundColor": "#1a1a2e",
+                        "borderRadius": "4px",
+                        "fontFamily": "monospace",
+                        "fontSize": "12px",
+                        "color": "#aaa",
+                        "marginBottom": "8px",
+                    },
+                    inputStyle={"marginRight": "4px"},
+                ),
+            ],
+        ),
+        # Store for visible column IDs
+        dcc.Store(id="visible-columns", data=_DEFAULT_VISIBLE),
+        # The blotter DataTable
+        table_section,
+    ]
+
+    if select_all_control is not None:
+        children.append(select_all_control)
 
     return html.Div(
         className="order-blotter",
         style={"marginTop": "20px"},
-        children=[
-            # Title row with column toggle
-            html.Div(
-                style={
-                    "display": "flex",
-                    "alignItems": "center",
-                    "gap": "10px",
-                    "marginBottom": "6px",
-                },
-                children=[
-                    html.H3("Order Blotter", style={"margin": "0"}),
-                    html.Button(
-                        "Columns",
-                        id="column-toggle-btn",
-                        n_clicks=0,
-                        title="Show/hide blotter columns",
-                        style={
-                            "padding": "4px 10px",
-                            "fontSize": "12px",
-                            "backgroundColor": "#333",
-                            "color": "#aaa",
-                            "border": "1px solid #555",
-                            "borderRadius": "4px",
-                            "cursor": "pointer",
-                        },
-                    ),
-                ],
-            ),
-            html.P(
-                "Click a row to recall into pricer. Edit cells directly to update order status."
-                if show_recall_hint
-                else "Edit cells directly to update order status. Changes sync across dashboards.",
-                style={"color": "#666", "fontSize": "11px", "margin": "0 0 6px 0"},
-            ),
-            # Column toggle panel (hidden by default)
-            html.Div(
-                id="column-toggle-panel",
-                style={"display": "none"},
-                children=[
-                    dcc.Checklist(
-                        id="column-checklist",
-                        options=[
-                            {"label": c["name"], "value": c["id"]}
-                            for c in _BLOTTER_COLUMNS
-                        ],
-                        value=_DEFAULT_VISIBLE,
-                        style={
-                            "display": "flex",
-                            "flexWrap": "wrap",
-                            "gap": "8px",
-                            "padding": "10px",
-                            "backgroundColor": "#1a1a2e",
-                            "borderRadius": "4px",
-                            "fontFamily": "monospace",
-                            "fontSize": "12px",
-                            "color": "#aaa",
-                            "marginBottom": "8px",
-                        },
-                        inputStyle={"marginRight": "4px"},
-                    ),
-                ],
-            ),
-            # Store for visible column IDs
-            dcc.Store(id="visible-columns", data=_DEFAULT_VISIBLE),
-            # The blotter DataTable
-            dash_table.DataTable(
-                id="blotter-table",
-                columns=visible_cols,
-                data=initial_data or [],
-                dropdown={
-                    "side": {
-                        "options": [
-                            {"label": "Bid", "value": "Bid"},
-                            {"label": "Offered", "value": "Offered"},
-                        ],
-                    },
-                    "traded": {
-                        "options": [
-                            {"label": "Yes", "value": "Yes"},
-                            {"label": "No", "value": "No"},
-                        ],
-                    },
-                    "bought_sold": {
-                        "options": [
-                            {"label": "Bought", "value": "Bought"},
-                            {"label": "Sold", "value": "Sold"},
-                            {"label": "-", "value": ""},
-                        ],
-                    },
-                },
-                sort_action="native",
-                sort_by=[{"column_id": "added_time", "direction": "desc"}],
-                style_table={"overflowX": "auto"},
-                style_cell={
-                    "textAlign": "center",
-                    "padding": "10px 14px",
-                    "fontFamily": "monospace",
-                    "fontSize": "13px",
-                    "cursor": "pointer",
-                },
-                style_header={
-                    "backgroundColor": "#1a1a2e",
-                    "color": "#aaa",
-                    "fontWeight": "bold",
-                    "borderBottom": "2px solid #333",
-                    "cursor": "default",
-                },
-                style_data={
-                    "backgroundColor": "#16213e",
-                    "color": "#e0e0e0",
-                    "borderBottom": "1px solid #1a1a2e",
-                },
-                style_cell_conditional=[
-                    # Editable columns get lighter background
-                    {
-                        "if": {"column_id": [
-                            "side", "size", "traded", "bought_sold",
-                            "traded_price", "initiator",
-                        ]},
-                        "backgroundColor": "#1c2a4a",
-                    },
-                ],
-                style_data_conditional=[
-                    # Bid/Offered coloring
-                    {
-                        "if": {
-                            "filter_query": '{side} = "Bid"',
-                            "column_id": "side",
-                        },
-                        "color": "#00ff88",
-                        "fontWeight": "bold",
-                    },
-                    {
-                        "if": {
-                            "filter_query": '{side} = "Offered"',
-                            "column_id": "side",
-                        },
-                        "color": "#ff4444",
-                        "fontWeight": "bold",
-                    },
-                    # Bought/Sold coloring
-                    {
-                        "if": {
-                            "filter_query": '{bought_sold} = "Bought"',
-                            "column_id": "bought_sold",
-                        },
-                        "color": "#00ff88",
-                        "fontWeight": "bold",
-                    },
-                    {
-                        "if": {
-                            "filter_query": '{bought_sold} = "Sold"',
-                            "column_id": "bought_sold",
-                        },
-                        "color": "#ff4444",
-                        "fontWeight": "bold",
-                    },
-                    # PnL coloring
-                    {
-                        "if": {
-                            "filter_query": "{pnl} contains '-'",
-                            "column_id": "pnl",
-                        },
-                        "color": "#ff4444",
-                        "fontWeight": "bold",
-                    },
-                    {
-                        "if": {
-                            "filter_query": "{pnl} contains '+'",
-                            "column_id": "pnl",
-                        },
-                        "color": "#00ff88",
-                        "fontWeight": "bold",
-                    },
-                    # Active row highlight
-                    {
-                        "if": {"state": "active"},
-                        "backgroundColor": "#1a3a5e",
-                        "border": "1px solid #00d4ff",
-                    },
-                    # Failed quote indicator (greyed italic --)
-                    {"if": {"filter_query": '{bid} = "--"', "column_id": "bid"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{mid} = "--"', "column_id": "mid"}, "color": "#666", "fontStyle": "italic"},
-                    {"if": {"filter_query": '{offer} = "--"', "column_id": "offer"}, "color": "#666", "fontStyle": "italic"},
-                ],
-            ),
-        ],
+        children=children,
     )
 
 
@@ -826,14 +870,14 @@ def create_blotter_layout():
             dcc.Store(id="last-write-time", data=current_mtime),
             # Header
             html.Div(children=[
-                html.H1("Order Blotter", style={"margin": "0"}),
+                html.H1("Admin Dashboard", style={"margin": "0"}),
                 html.P(
-                    "Shared blotter \u2014 edits sync with the pricer dashboard",
+                    "Order blotter \u2014 edits sync with the pricer dashboard",
                     style={"color": "#666", "fontSize": "12px", "margin": "4px 0 0 0"},
                 ),
             ]),
             html.Hr(style={"borderColor": "#333"}),
             # Blotter
-            create_order_blotter(initial_data=blotter_data, show_recall_hint=False),
+            create_order_blotter(initial_data=blotter_data, show_recall_hint=False, resizable=True, selectable=True),
         ],
     )

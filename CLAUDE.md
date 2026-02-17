@@ -92,6 +92,7 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 - **Condors (IC/PC/CC):** 4-leg, 4-strike structures. Iron condor mixes puts+calls; put/call condor uses single type
 - **Spread collars (CSC/PSC):** 3-leg collar variants. CSC = buy put + sell call spread. PSC = buy put spread + sell call
 - **Structure bid/offer:** Calculated from screen prices — bid uses worst fills (buy at offer, sell at bid), offer uses best fills
+- **Structure bid <= offer guaranteed:** `structure_pricer.py` guarantees `struct_bid <= struct_offer` by construction (BUY legs widen toward offer, SELL legs widen toward bid). **Never use `abs()` or `min/max` to normalize structure prices** — it destroys sign information (negative = debit/crossed market) and can swap bid/offer when both values are negative.
 
 ## Key Commands
 ```bash
@@ -120,9 +121,12 @@ Auto-refresh updates ONLY calculations and live-feed data from the API. It must 
 - **Current implementation:**
   - `auto_price_from_table` — triggered by `data_timestamp` + `manual-underlying` only (NO interval). Updates pricer table + header + broker quote.
   - `refresh_live_display` — triggered by `live-refresh-interval` only. Updates header (live stock price) + broker quote (edge). Never touches any DataTable.
-  - `refresh_blotter_prices` — triggered by `live-refresh-interval`. Updates `order-store` (client-side store) only. No file write, no `blotter-table.data` output.
+  - `refresh_blotter_prices` — triggered by `live-refresh-interval`. Updates `order-store` (client-side store) AND persists to `orders.json` so Admin Dashboard picks up fresh prices via file polling. Stamps `last-write-time` so the pricer's own poll skips reloading.
+  - `push_store_to_blotter` — triggered by `order-store.data` changes (NOT a timer). Pushes display rows to `blotter-table.data` only when user is not actively editing. Sets `blotter-edit-suppress` so `sync_blotter_edits` skips the programmatic `data_timestamp` change.
 - **Blotter table:** 6 editable fields (`side`, `size`, `traded`, `bought_sold`, `traded_price`, `initiator`) must never be overwritten. Only update pricing columns and computed `pnl`.
 - **Wrap API calls in try/except.** Bloomberg fetch errors must not crash the refresh callback — a single bad ticker should not break repricing for all orders.
+- **CRITICAL: Any callback that programmatically writes to `blotter-table.data` MUST also output `blotter-edit-suppress = True`.** Writing to `data` triggers `data_timestamp`, which fires `sync_blotter_edits`. Without the suppress flag, `sync_blotter_edits` runs, potentially writes back to `order-store.data`, which re-triggers the original callback — creating an infinite loop. This applies to `push_store_to_blotter`, `sync_blotter_edits` itself, and `add_order`.
+- **CRITICAL: Every return path in a callback must return the correct number of values matching its Output count.** A callback with N Outputs must return N values on every path (including early returns). Returning fewer values causes Dash errors. Use `return no_update, no_update, ...` (one per Output) for skip paths.
 
 ## Bloomberg Failure Visibility (MUST follow for all pricing displays)
 Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently show zero prices or fallback values.
