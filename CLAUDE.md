@@ -7,30 +7,61 @@ The core use case: broker sends an order like `AAPL Jun26 240/220 PS 1X2 vs250 1
 
 ## Tech Stack
 - **Python 3.12** (venv at `.venv/`, activate with `source .venv/Scripts/activate` on Windows)
-- **Dash (Plotly)** — web dashboard
+- **FastAPI + Uvicorn** — API backend (replaces Dash)
+- **React 18 + TypeScript + Vite** — frontend SPA
+- **AG Grid Community** — data grid (column resize, cell flash, streaming updates)
+- **Zustand** — React state management
 - **NumPy / SciPy** — numerical pricing
 - **blpapi 3.25.12** — Bloomberg Terminal API (installed; falls back to mock when Terminal not running)
 - **pytest** — 135 tests, all passing
 
 ## Project Structure
 ```
-src/options_pricer/
-├── models.py            # OptionLeg, OptionStructure, ParsedOrder, LegMarketData, StructureMarketData
-├── parser.py            # Flexible IDB broker shorthand parser (regex-based, order-independent tokens)
-├── pricer.py            # Black-Scholes pricing engine + Greeks (delta, gamma, theta, vega, rho)
-├── structure_pricer.py  # Calculates structure bid/offer/mid from individual leg screen prices
-├── bloomberg.py         # BloombergClient (live) + MockBloombergClient (BS-based realistic quotes)
-├── order_store.py       # JSON persistence + cross-process file locking (~/.options_pricer/orders.json)
-└── dashboard/
-    ├── app.py           # Dash web app entry point + pricer-specific callbacks
-    ├── blotter_app.py   # Standalone blotter dashboard (port 8051) — shares orders.json
-    ├── callbacks.py     # Shared blotter callbacks (poll, sync edits, column toggle/visibility)
-    └── layouts.py       # UI layouts: pricer dashboard, blotter-only dashboard, shared components
+src/
+  options_pricer/           # Python business logic (UNCHANGED)
+    models.py               # OptionLeg, OptionStructure, ParsedOrder, LegMarketData, StructureMarketData
+    parser.py               # Flexible IDB broker shorthand parser (regex-based, order-independent tokens)
+    pricer.py               # Black-Scholes pricing engine + Greeks (delta, gamma, theta, vega, rho)
+    structure_pricer.py     # Calculates structure bid/offer/mid from individual leg screen prices
+    bloomberg.py            # BloombergClient (live) + MockBloombergClient (BS-based realistic quotes)
+    order_store.py          # JSON persistence + cross-process file locking (~/.options_pricer/orders.json)
+  api/                      # FastAPI backend
+    main.py                 # FastAPI app, CORS, lifespan, background price broadcaster
+    schemas.py              # Pydantic request/response models
+    dependencies.py         # Bloomberg client singleton, WebSocket ConnectionManager
+    ws.py                   # WebSocket endpoint + background price broadcast loop
+    routes/
+      parse.py              # POST /api/parse
+      price.py              # POST /api/price
+      orders.py             # GET/POST/PUT/DELETE /api/orders
+      source.py             # POST /api/toggle-source, GET /api/health
+frontend/                   # React + Vite + TypeScript
+  src/
+    main.tsx, App.tsx
+    api/
+      client.ts             # REST fetch wrappers
+      ws.ts                 # WebSocket client (auto-reconnect, channel multiplexing)
+    stores/
+      pricerStore.ts        # Zustand: parsed order, table data, header, broker quote
+      blotterStore.ts       # Zustand: orders, column visibility, selection (persisted)
+      connectionStore.ts    # Zustand: WS status, bloomberg health, data source
+    components/
+      Layout/               # AppShell, Header
+      Pricer/               # OrderInput, PricerToolbar, PricingGrid, StructureBuilder,
+                            # OrderHeader, BrokerQuote, AddOrderButton
+      Blotter/              # BlotterGrid, ColumnToggle
+      Shared/               # HealthBadge, AlertBanner
+    hooks/
+      useWebSocket.ts       # Routes WS messages to stores
+    types/index.ts          # TS interfaces matching API schemas
+    theme/
+      tokens.ts             # Colors, fonts, spacing from design system
+      aggrid.ts             # AG Grid dark theme CSS overrides
 tests/
-├── test_models.py       # 17 tests — payoffs, structures
-├── test_parser.py       # 68 tests — extraction helpers + full order parsing for all IDB formats
-├── test_order_store.py  # 17 tests — JSON persistence, file locking, mtime helpers
-└── test_pricer.py       # 25 tests — BS pricing, put-call parity, Greeks, structure pricing
+  test_models.py            # 17 tests — payoffs, structures
+  test_parser.py            # 68 tests — extraction helpers + full order parsing for all IDB formats
+  test_order_store.py       # 17 tests — JSON persistence, file locking, mtime helpers
+  test_pricer.py            # 25 tests — BS pricing, put-call parity, Greeks, structure pricing
 ```
 
 ## Broker Shorthand Format
@@ -65,22 +96,25 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 ```
 
 ## Dashboard Display
-- **Paste Order:** `dcc.Textarea` for broker shorthand input. Enter key triggers parse & price via clientside callback.
-- **Pricer Toolbar:** Underlying | Structure | Tie | Delta | Order Price | Side | Qty | [Add Order] — dual-purpose: configures pricing AND submits to order blotter. Side/Qty/Price are all optional.
+- **Paste Order:** Textarea for broker shorthand input. Enter key triggers parse & price.
+- **Pricer Toolbar:** Underlying | Structure | Tie | Delta | Order Price | Side | Qty — shown after first price. Changes trigger auto-reprice.
 - **Header bar:** Ticker, structure type, tie price, current stock price, delta (+/-)
-- **Pricing table:** Editable DataTable — Leg | Expiry | Strike | Type | Side | Qty | Bid Size | Bid | Mid | Offer | Offer Size. Editing triggers auto-reprice.
-  - Structure row at bottom with implied bid/offer/mid and sizes
-- **Broker quote section:** Shows broker price vs screen mid and edge
-- **Order Blotter:** Persistent library of all priced structures. 15 columns (6 editable: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Native sort (default: time desc). Click row to recall into pricer. PnL auto-calcs for traded orders. Data persists to `~/.options_pricer/orders.json`. **Syncs across dashboards** via 2-second file polling.
-- **Standalone Blotter (port 8051):** Blotter-only dashboard — shows the same order data, editable cells, column toggle. No pricer or parser. Edits sync bidirectionally with the pricer dashboard.
-- **Architecture:** Toolbar is always visible; "Add Order" validates a structure is priced. Hidden ID stubs (`order-input-section`, `order-side`, `order-size`) exist for Dash callback compatibility after the standalone order input section was removed.
+- **Pricing table:** AG Grid — Leg | Expiry | Strike | Type | Ratio | Bid Size | Bid | Mid | Offer | Offer Size. Editable cells (expiry, strike, type, ratio) trigger auto-reprice via `onCellValueChanged`. Structure summary as pinned bottom row (blue-tinted).
+- **Structure Builder:** +Row, -Row, Flip, Clear buttons below the pricing grid.
+- **Broker quote section:** Shows broker price vs screen mid and edge (color-coded green/red).
+- **Add Order:** Creates a blotter order from the current priced structure.
+- **Order Blotter:** AG Grid with 16 columns (6 editable with dropdowns: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Sortable. Click row to recall into pricer. PnL auto-calcs for traded orders. Cell flash on price updates. Data persists to `~/.options_pricer/orders.json`.
+- **Health indicator:** Green/red badge for Bloomberg status, WS connection dot (green=live, gray=reconnecting).
+- **Blotter-only view:** `http://localhost:5173/blotter` — standalone blotter without the pricer (replaces old `blotter_app.py` on port 8051). Same WebSocket sync, same editable cells. Header links between the two views.
 
-## Cross-Dashboard Sync Architecture
-- Both dashboards read/write `~/.options_pricer/orders.json` with atomic writes + cross-process file locking (`msvcrt` on Windows)
-- A `dcc.Interval` (2-second timer) checks `os.path.getmtime()` on the JSON file
-- Write suppression: after writing, the dashboard stamps `last-write-time = file_mtime` so it skips reloading its own changes
-- `blotter-edit-suppress` prevents feedback loops when `sync_blotter_edits` programmatically updates the blotter table
-- **Both dashboards use the same blotter protocol:** table only updates on user actions (`sync_blotter_edits`, `add_order`), never from store changes. Polling updates the `order-store` (fresh prices), which are picked up on the next user edit. This prevents React re-renders from disrupting editing UI (dropdowns, keystrokes, cell selection).
+## Real-Time Architecture
+- **Single FastAPI server** handles REST API + WebSocket on port 8000
+- **Background asyncio task** reprices all blotter orders every 1s, broadcasts via WebSocket
+- **WebSocket channels:** `blotter_prices` (1s price updates), `health` (Bloomberg status), `order_sync` (cross-tab sync), `stock_price` (live ticker)
+- **Cross-tab sync:** Order mutations broadcast via WS to all connected clients (replaces file polling)
+- **AG Grid `onCellValueChanged`** fires only on user edits — no suppress flags needed (unlike Dash DataTable)
+- **AG Grid `applyTransactionAsync`** for streaming price updates without disrupting edit state
+- `orders.json` remains the source of truth for persistence
 
 ## Key Concepts
 - **Tied to (tt/vs):** The stock price at which the option package is quoted. Delta-hedged trades sell/buy stock at this price.
@@ -99,42 +133,24 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 ```bash
 source .venv/Scripts/activate                      # Windows (Git Bash)
 pytest tests/ -v                                   # Run all 135 tests
-python -m options_pricer.dashboard.app             # Launch pricer dashboard at http://127.0.0.1:8050
-python -m options_pricer.dashboard.blotter_app     # Launch blotter dashboard at http://127.0.0.1:8051
+uvicorn api.main:app --reload --port 8000          # FastAPI backend
+cd frontend && npm run dev                         # React dev server at http://localhost:5173
+cd frontend && npm run build                       # Production build
 ```
 
-## UI Rules (MUST follow when editing layouts.py or any dashboard styling)
-- **No content cutoff:** Never use `overflow: hidden` on containers that hold interactive content (toolbars, tables, inputs, dropdowns). Use `overflow: visible` or `overflow: auto` instead.
-- **Box sizing:** All elements with `width: 100%` must also set `boxSizing: border-box` so padding/border don't cause overflow.
-- **Max width:** The main layout container uses `maxWidth: 1400px`. Do not shrink this without good reason.
-- **Text inputs that may contain long strings:** Use `dcc.Textarea` (not `dcc.Input`) so text wraps visibly. Set `minHeight: 80px`, `resize: vertical`, `lineHeight: 1.5`, and `boxSizing: border-box`. `dcc.Input` is single-line and clips long text — never use it for order/paste fields.
-- **Enter key on Textarea:** `dcc.Textarea` does not support `n_submit`. Use a clientside callback that binds a `keydown` listener and calls `btn.click()` on Enter (see `app.py` for the pattern). Shift+Enter should still allow newlines.
-- **Dropdowns in tables:** Dash DataTable dropdown columns can clip inside tight containers — ensure parent has `overflow: visible`.
-- **Test visually:** After any layout change, confirm in the browser that all text, inputs, buttons, and table columns are fully visible and not clipped. Scroll horizontally if the table is wide (`overflowX: auto` on DataTable).
-- **Consistent sizing:** Use monospace font at 13px for data cells, 16px for the order input. Keep padding consistent (8-14px for inputs, 10-14px for table cells).
-- **Resizable table containers:** Wrap DataTables in a container with CSS `resize: vertical` (or `resize: both`) so users can drag to adjust the table area. Dash DataTable does NOT support a column-level `resizable` prop — never add invalid keys to column definitions (valid keys: `id`, `name`, `type`, `presentation`, `editable`, `selectable`, `clearable`, `deletable`, `hideable`, `renamable`, `filter_options`, `format`, `on_change`, `sort_as_null`, `validation`).
+## UI Rules
+- **Theme tokens:** All colors, fonts, spacing in `frontend/src/theme/tokens.ts`. AG Grid overrides in `frontend/src/theme/aggrid.ts`.
+- **No content cutoff:** Never use `overflow: hidden` on containers with interactive content.
+- **Max width:** Main layout uses `maxWidth: 1600px`.
+- **Consistent sizing:** Monospace font at 13px for data cells, 16px for inputs.
+- **AG Grid column resize:** Built-in via `resizable: true` in defaultColDef.
+- **Test visually:** After any layout change, confirm in the browser at `http://localhost:5173`.
 
-## Auto-Refresh Rules (MUST follow across ALL dashboard components)
-Auto-refresh updates ONLY calculations and live-feed data from the API. It must NEVER touch any field the user can manually edit.
-
-- **Principle: auto-refresh = calculations + live feed ONLY.** Any column or cell that accepts manual user input is off-limits to auto-refresh. Only overwrite values that come from the API (prices, sizes) or are computed from them (mid, PnL). This applies to every table, every callback, every dashboard — not just the blotter.
-- **CRITICAL: Never let a timer/interval callback write to a DataTable's `data` property.** Any assignment to `data` — even `Patch()`, even identical values — triggers a React re-render that resets all editing UI state (closes open dropdowns, clears in-progress keystrokes, deselects cells). This is a Dash/React limitation with no workaround.
-- **Architecture: separate timer callbacks from table callbacks.** Timer-driven callbacks (`dcc.Interval`) must only output to display-only HTML components (`html.Div`, `html.Span`) and `dcc.Store` components. Table updates (`pricing-display.data`, `blotter-table.data`) must only happen in response to user actions (cell edit via `data_timestamp`, button click, parse order, etc.).
-- **Current implementation:**
-  - `auto_price_from_table` — triggered by `data_timestamp` + `manual-underlying` only (NO interval). Updates pricer table + header + broker quote.
-  - `refresh_live_display` — triggered by `live-refresh-interval` only. Updates header (live stock price) + broker quote (edge). Never touches any DataTable.
-  - `refresh_blotter_prices` — triggered by `live-refresh-interval`. Updates `order-store` (client-side store) AND persists to `orders.json` so Admin Dashboard picks up fresh prices via file polling. Stamps `last-write-time` so the pricer's own poll skips reloading.
-- **Blotter table:** 6 editable fields (`side`, `size`, `traded`, `bought_sold`, `traded_price`, `initiator`) must never be overwritten. Only update pricing columns and computed `pnl`.
-- **Wrap API calls in try/except.** Bloomberg fetch errors must not crash the refresh callback — a single bad ticker should not break repricing for all orders.
-- **CRITICAL: Any callback that programmatically writes to `blotter-table.data` MUST also output `blotter-edit-suppress = True`.** Writing to `data` triggers `data_timestamp`, which fires `sync_blotter_edits`. Without the suppress flag, `sync_blotter_edits` runs, potentially writes back to `order-store.data`, which re-triggers the original callback — creating an infinite loop. This applies to `push_store_to_blotter`, `sync_blotter_edits` itself, and `add_order`.
-- **CRITICAL: Every return path in a callback must return the correct number of values matching its Output count.** A callback with N Outputs must return N values on every path (including early returns). Returning fewer values causes Dash errors. Use `return no_update, no_update, ...` (one per Output) for skip paths.
-
-## Pricer Auto-Recalculation Principle
-Any change to a pricing input must trigger automatic recalculation of structure bid/mid/offer. Pricing inputs include:
-- **Table edits:** expiry, strike, type, ratio (via `data_timestamp`)
-- **Toolbar fields:** underlying, tie, delta, broker price, side, quantity (all `Input`, not `State`)
-- The `auto-price-suppress` flag prevents self-loops (callback outputs table → timestamp fires → suppress blocks → resets to False)
-- Toolbar `dcc.Input` fields must have `debounce=True` to avoid per-keystroke repricing
+## Auto-Recalculation Rules
+- AG Grid's `onCellValueChanged` fires only on user edits (not programmatic updates) — no suppress flags needed.
+- Streaming price updates via WebSocket use Zustand store updates — AG Grid re-renders only affected cells.
+- **Blotter editable fields** (side, size, traded, bought_sold, traded_price, initiator) must never be overwritten by price updates.
+- Any change to a pricing input triggers automatic recalculation: table edits (expiry, strike, type, ratio) and toolbar fields (underlying, tie, delta, broker price, side, quantity).
 
 ## Bloomberg Failure Visibility (MUST follow for all pricing displays)
 Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently show zero prices or fallback values.
@@ -146,21 +162,20 @@ Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently s
 - **Never show "0.00" as a price** in any table cell. Any code path that formats prices for display must check for zeros and use `--`.
 
 ## Engineering Conventions
-- **Dependencies:** `pyproject.toml` is the single source of truth for all dependencies. No `requirements.txt`. Dependencies use minimum version pinning (`>=X.Y.Z`). Dev dependencies go in `[project.optional-dependencies] dev`, Bloomberg in `bloomberg`.
-- **Cross-platform:** Code must run on both Windows (PC with Bloomberg Terminal) and macOS/Linux (dev). Use `sys.platform == "win32"` guards for Windows-specific modules (`msvcrt`). File locking uses `msvcrt` on Windows, `fcntl` on Unix — see `order_store.py`.
-- **No orphan config files:** All settings belong in the module that uses them (e.g., Bloomberg host/port in `bloomberg.py`, dashboard port in `app.py`). Do not create standalone config files unless they are imported somewhere.
-- **Callback output count:** Every return path in a Dash callback MUST return exactly N values matching the N Outputs. Use `return no_update, no_update, ...` (one per Output) for skip/error paths. This is a common source of runtime crashes.
-- **Style constants:** Use a single `_HIDDEN = {"display": "none"}` dict — do not create duplicates like `_HIDDEN_ALERT`. All theme constants live in `layouts.py` and are imported by other dashboard modules.
-- **Module-level imports and constants:** Never use `import` inside function bodies or define constants that should be module-level inside frequently-called functions. Dash callbacks run on every user interaction and timer tick.
+- **Python dependencies:** `pyproject.toml` is the single source of truth. Min version pinning (`>=X.Y.Z`). Dev deps in `[project.optional-dependencies] dev`, Bloomberg in `bloomberg`.
+- **Frontend dependencies:** `frontend/package.json`. React 18, AG Grid Community 32, Zustand 5, Vite 6.
+- **Cross-platform:** Code runs on Windows (Bloomberg Terminal) and macOS/Linux (dev). `sys.platform == "win32"` guards for Windows modules. File locking: `msvcrt` (Windows), `fcntl` (Unix).
+- **API design:** All REST endpoints under `/api/` prefix. WebSocket at `/api/ws/prices`. Vite proxy forwards `/api` to FastAPI.
+- **State management:** Zustand stores are the single source of truth for UI state. Blotter column visibility persisted to localStorage via `zustand/persist`.
 - **Technical debt:** Track deferred items in `DEBT.md` with rationale for deferral.
 
 ## Current Status & Next Steps
-- Parser handles all example formats provided so far (including `Nk` quantity format) — feed more real orders to refine
-- Bloomberg API integrated but needs Terminal running for live data; mock works for dev
-- Order Blotter with JSON persistence, editable cells, column toggle, PnL auto-calc, and recall working
-- Cross-dashboard sync: pricer (8050) + standalone blotter (8051) share orders.json with polling + file locking
+- Full React + FastAPI migration complete (replaced Dash)
+- Parser handles all IDB broker shorthand formats (19 structure types)
+- Bloomberg API integrated; falls back to mock when Terminal not running
+- Order Blotter: AG Grid with live price updates via WebSocket, editable cells, column toggle, PnL auto-calc, cross-tab sync
+- 135 Python tests all passing (business logic unchanged)
 - Next: delta adjustment for stock tie vs current price in structure pricing
-- Structure types: call, put, put spread, call spread, risk reversal, straddle, strangle, butterfly, put fly, call fly, iron butterfly, iron condor, put condor, call condor, collar, call spread collar, put spread collar
 - Next: more structure types as needed (diagonals, etc.)
 - Next: SPX/index options with combo pricing
 

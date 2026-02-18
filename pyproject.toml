@@ -8,10 +8,11 @@ version = "0.1.0"
 description = "Options pricing tool for IDB equity derivatives brokers"
 requires-python = ">=3.11"
 dependencies = [
-    "dash>=2.14.0",
-    "plotly>=5.18.0",
     "numpy>=1.26.0",
     "scipy>=1.11.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]

@@ -22,6 +22,10 @@ htmlcov/
 blpapi*.whl
 bloomberg_session_*.log
 
+# Frontend
+node_modules/
+frontend/dist/
+
 # IDE
 .vscode/
 .idea/
