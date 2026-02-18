@@ -100,7 +100,7 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 - **Pricer Toolbar:** Underlying | Structure | Tie | Delta | Order Price | Side | Qty — shown after first price. Changes trigger auto-reprice.
 - **Header bar:** Ticker, structure type, tie price, current stock price, delta (+/-)
 - **Pricing table:** AG Grid — Leg | Expiry | Strike | Type | Ratio | Bid Size | Bid | Mid | Offer | Offer Size. Editable cells (expiry, strike, type, ratio) trigger auto-reprice via `onCellValueChanged`. Structure summary as pinned bottom row (blue-tinted).
-- **Structure Builder:** +Row, -Row, Flip, Clear buttons below the pricing grid.
+- **Structure Builder:** +Row, -Row, Flip, Clear buttons above the pricing grid (always visible).
 - **Broker quote section:** Shows broker price vs screen mid and edge (color-coded green/red).
 - **Add Order:** Creates a blotter order from the current priced structure.
 - **Order Blotter:** AG Grid with 16 columns (6 editable with dropdowns: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Sortable. Click row to recall into pricer. PnL auto-calcs for traded orders. Cell flash on price updates. Data persists to `~/.options_pricer/orders.json`.
@@ -141,6 +141,8 @@ cd frontend && npm run build                       # Production build
 ## UI Rules
 - **Theme tokens:** All colors, fonts, spacing in `frontend/src/theme/tokens.ts`. AG Grid overrides in `frontend/src/theme/aggrid.ts`.
 - **No content cutoff:** Never use `overflow: hidden` on containers with interactive content.
+- **AG Grid autoHeight:** PricingGrid uses `domLayout="autoHeight"` — never set an explicit `height` on its container div (conflicts with autoHeight and breaks sibling layout).
+- **Button visibility:** Grid action buttons (+Row, -Row, Flip, Clear, Add Order) must be rendered ABOVE the grid, not below. Components that appear conditionally after pricing (OrderHeader, BrokerQuote, PricerToolbar) push content down — buttons below the grid can be pushed off-screen.
 - **Max width:** Main layout uses `maxWidth: 1600px`.
 - **Consistent sizing:** Monospace font at 13px for data cells, 16px for inputs.
 - **AG Grid column resize:** Built-in via `resizable: true` in defaultColDef.

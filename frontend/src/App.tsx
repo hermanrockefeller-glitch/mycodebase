@@ -82,13 +82,13 @@ export default function App() {
           <PricerToolbar />
 
           <div style={{ marginTop: spacing.xl }}>
-            <PricingGrid />
-            <div style={{ display: 'flex', gap: spacing.md, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: spacing.md, alignItems: 'center', marginBottom: spacing.md }}>
               <StructureBuilder />
               <div style={{ marginLeft: 'auto' }}>
                 <AddOrderButton />
               </div>
             </div>
+            <PricingGrid />
           </div>
         </>
       )}

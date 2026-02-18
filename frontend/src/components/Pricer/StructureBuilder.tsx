@@ -20,7 +20,6 @@ export default function StructureBuilder() {
       style={{
         display: 'flex',
         gap: spacing.md,
-        marginTop: spacing.lg,
         alignItems: 'center',
       }}
     >

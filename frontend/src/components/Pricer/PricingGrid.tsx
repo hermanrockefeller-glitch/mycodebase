@@ -107,7 +107,7 @@ export default function PricingGrid() {
     <div>
       <div
         className="ag-theme-alpine-dark"
-        style={{ width: '100%', height: legRows.length * 42 + 56 + (structureRow.length ? 48 : 0) }}
+        style={{ width: '100%' }}
       >
         <AgGridReact<LegRow>
           ref={gridRef}

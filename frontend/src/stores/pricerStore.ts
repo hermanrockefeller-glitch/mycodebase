@@ -186,7 +186,7 @@ export const usePricerStore = create<PricerState>((set, get) => ({
 
     if (legs.length === 0) return;
 
-    set({ tableError: '' });
+    set({ tableError: '', loading: true });
     try {
       const structName = (state.structureType || 'custom').replace(/_/g, ' ');
       const res = await api.priceFromTable({
@@ -199,9 +199,10 @@ export const usePricerStore = create<PricerState>((set, get) => ({
         quote_side: state.quoteSide || 'bid',
         quantity: parseInt(state.quantity) || 1,
       });
+      set({ loading: false });
       get().applyPriceResponse(res);
     } catch (e: unknown) {
-      set({ tableError: e instanceof Error ? e.message : String(e) });
+      set({ loading: false, tableError: e instanceof Error ? e.message : String(e) });
     }
   },
 
@@ -241,7 +242,7 @@ export const usePricerStore = create<PricerState>((set, get) => ({
   },
 
   flipStructure: () => {
-    const { tableData, delta } = get();
+    const { tableData, delta, underlying } = get();
     const newRows = tableData.map(row => {
       if (row.leg.startsWith('Leg') && row.ratio !== '' && row.ratio !== 0) {
         return { ...row, ratio: -Number(row.ratio) };
@@ -250,6 +251,9 @@ export const usePricerStore = create<PricerState>((set, get) => ({
     });
     const newDelta = delta ? String(-parseFloat(delta)) : '';
     set({ tableData: newRows, delta: newDelta });
+    if (underlying.trim()) {
+      get().repriceFromTable();
+    }
   },
 
   clearAll: () => {

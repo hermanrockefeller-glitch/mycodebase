@@ -4,14 +4,19 @@ Run with: uvicorn api.main:app --reload --port 8000
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 
 from .dependencies import shutdown_client, startup_client
 from .routes import orders, parse, price, source
 from .ws import price_broadcast_loop, router as ws_router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -33,6 +38,17 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions — returns JSON so the frontend can parse it."""
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal error: {type(exc).__name__}: {exc}"},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,

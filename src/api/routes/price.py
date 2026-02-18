@@ -34,6 +34,22 @@ _SIDE_MAP = {"buy": Side.BUY, "sell": Side.SELL}
 
 def _build_parsed_order(req: PriceRequest) -> ParsedOrder:
     """Reconstruct a ParsedOrder from the API request."""
+    for i, spec in enumerate(req.legs):
+        if spec.option_type not in _TYPE_MAP:
+            raise ValueError(
+                f"Leg {i + 1}: invalid option_type '{spec.option_type}' "
+                f"(expected 'call' or 'put')"
+            )
+        if spec.side not in _SIDE_MAP:
+            raise ValueError(
+                f"Leg {i + 1}: invalid side '{spec.side}' "
+                f"(expected 'buy' or 'sell')"
+            )
+    if req.quote_side not in ("bid", "offer"):
+        raise ValueError(
+            f"Invalid quote_side '{req.quote_side}' (expected 'bid' or 'offer')"
+        )
+
     legs = [
         OptionLeg(
             underlying=spec.underlying or req.underlying,
@@ -146,15 +162,23 @@ def _build_table_rows(order: ParsedOrder, leg_market, struct_data) -> list[LegRo
 
 @router.post("/price", response_model=PriceResponse)
 def price_structure(req: PriceRequest):
-    order = _build_parsed_order(req)
+    try:
+        order = _build_parsed_order(req)
+    except (ValueError, KeyError, TypeError) as e:
+        logger.warning("Invalid price request: %s", e)
+        raise HTTPException(status_code=422, detail=f"Invalid request: {e}")
 
     try:
         spot, leg_market, struct_data, multiplier = _fetch_and_price(order)
     except Exception as e:
-        logger.exception("Pricing failed")
+        logger.exception("Pricing failed for %s", order.underlying)
         raise HTTPException(status_code=500, detail=f"Pricing error: {e}")
 
-    table_rows = _build_table_rows(order, leg_market, struct_data)
+    try:
+        table_rows = _build_table_rows(order, leg_market, struct_data)
+    except Exception as e:
+        logger.exception("Failed to build table rows for %s", order.underlying)
+        raise HTTPException(status_code=500, detail=f"Response build error: {e}")
 
     any_leg_failed = any(m.bid == 0 and m.offer == 0 for m in leg_market)
     if any_leg_failed:
@@ -206,6 +230,16 @@ def price_structure(req: PriceRequest):
         bid_size=bid_size,
         offer_size=offer_size,
         multiplier=multiplier,
+    )
+
+    logger.debug(
+        "Priced %s %s: bid=%s, mid=%s, offer=%s, legs=%d",
+        order.underlying,
+        order.structure.name,
+        f"{disp_bid:.2f}" if disp_bid is not None else "--",
+        f"{disp_mid:.2f}" if disp_mid is not None else "--",
+        f"{disp_offer:.2f}" if disp_offer is not None else "--",
+        len(order.structure.legs),
     )
 
     return PriceResponse(
