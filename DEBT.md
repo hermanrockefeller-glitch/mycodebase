@@ -30,4 +30,3 @@ Items identified during code review, intentionally deferred with rationale.
 
 - **No linter/formatter configured** — No `ruff`, `black`, or `flake8` configuration. Code style is consistent by convention but not enforced. Deferred because the codebase is small (single developer) and style is already uniform.
 
-- **`_EMPTY_ROW` naming** — Has a leading underscore suggesting private scope, but is exported and used by `app.py`. Should be renamed to `EMPTY_ROW` for public API consistency. Deferred because renaming requires updating all import sites and is cosmetic.
