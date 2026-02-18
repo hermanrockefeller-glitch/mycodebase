@@ -4,17 +4,23 @@ Orders are stored at ~/.options_pricer/orders.json with atomic writes
 (write to temp file, then rename) to prevent corruption.
 Both dashboards can read/write the same file.
 
-Cross-process file locking (msvcrt on Windows) prevents data loss when
-two dashboard processes perform concurrent read-modify-write cycles.
+Cross-process file locking (msvcrt on Windows, fcntl on Unix) prevents
+data loss when two dashboard processes perform concurrent read-modify-write
+cycles.
 """
 
 import json
-import msvcrt
 import os
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 _ORDERS_DIR = Path.home() / ".options_pricer"
@@ -28,31 +34,46 @@ _LOCK_RETRY = 0.05    # retry interval
 def _file_lock(filepath: Path | None = None):
     """Acquire an exclusive cross-process lock on the orders file.
 
-    Uses a sidecar .lock file with msvcrt.locking() for Windows.
-    Lock path is derived from filepath's parent so tests with tmp_path
-    get isolated lock files.
+    Uses a sidecar .lock file with msvcrt.locking() on Windows or
+    fcntl.flock() on Unix.  Lock path is derived from filepath's parent
+    so tests with tmp_path get isolated lock files.
     """
     lock_path = (filepath.parent / "orders.lock") if filepath else _LOCK_FILE
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
-    deadline = time.monotonic() + _LOCK_TIMEOUT
     acquired = False
     try:
-        while time.monotonic() < deadline:
-            try:
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                acquired = True
-                break
-            except OSError:
-                time.sleep(_LOCK_RETRY)
-        if not acquired:
-            raise TimeoutError("Could not acquire order file lock within timeout")
+        if sys.platform == "win32":
+            deadline = time.monotonic() + _LOCK_TIMEOUT
+            while time.monotonic() < deadline:
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    acquired = True
+                    break
+                except OSError:
+                    time.sleep(_LOCK_RETRY)
+            if not acquired:
+                raise TimeoutError("Could not acquire order file lock within timeout")
+        else:
+            deadline = time.monotonic() + _LOCK_TIMEOUT
+            while time.monotonic() < deadline:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError:
+                    time.sleep(_LOCK_RETRY)
+            if not acquired:
+                raise TimeoutError("Could not acquire order file lock within timeout")
         yield
     finally:
         if acquired:
             try:
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                if sys.platform == "win32":
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
                 pass
         os.close(fd)

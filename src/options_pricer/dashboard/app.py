@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 import uuid
 from datetime import date, datetime
 
@@ -81,8 +82,6 @@ _client = create_client(use_mock=False)
 # Callback: toggle data source (Bloomberg / Mock)
 # ---------------------------------------------------------------------------
 
-_HIDDEN_ALERT = {"display": "none"}
-
 @callback(
     Output("data-source-badge", "children"),
     Output("data-source-badge", "style"),
@@ -105,19 +104,19 @@ def toggle_data_source(n_clicks, current_source):
         if new_client.connect():
             _client = new_client
             return ("Bloomberg API", BADGE_GREEN, "Switch to Mock", "",
-                    "Bloomberg API", _HIDDEN_ALERT, "", "ok")
+                    "Bloomberg API", _HIDDEN, "", "ok")
         else:
             return (
                 "Mock Data", BADGE_BLUE, "Switch to Bloomberg",
                 "Bloomberg API connection failed. Check Terminal is running.",
-                "Mock Data", _HIDDEN_ALERT, "", "ok",
+                "Mock Data", _HIDDEN, "", "ok",
             )
     else:
         # Switch to Mock
         _client.disconnect()
         _client = MockBloombergClient()
         return ("Mock Data", BADGE_BLUE, "Switch to Bloomberg", "",
-                "Mock Data", _HIDDEN_ALERT, "", "ok")
+                "Mock Data", _HIDDEN, "", "ok")
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +241,9 @@ STRUCTURE_TEMPLATES = {
 
 # Map short codes to model enums
 _TYPE_MAP = {"C": OptionType.CALL, "P": OptionType.PUT}
+
+# Blotter fields that accept manual user input (never overwritten by auto-refresh)
+_MANUAL_FIELDS = ("side", "size", "traded", "bought_sold", "traded_price", "initiator")
 
 # Error tail for price_order (outputs 3-17 when pricing fails)
 _PRICE_ORDER_ERR_TAIL = (
@@ -767,7 +769,7 @@ def refresh_live_display(n_intervals, current_data, underlying,
     is_bloomberg = (data_source == "Bloomberg API")
 
     # Default health outputs: no alert, keep current badge
-    alert_style = _HIDDEN_ALERT
+    alert_style = _HIDDEN
     alert_text = ""
     badge_style = no_update
     badge_text = no_update
@@ -1030,8 +1032,6 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data, data_ts):
     # JSON polling into order-store.  The pricer's blotter-table is stale
     # for admin-originated edits (no push_store_to_blotter on the pricer),
     # so an unconditional merge would revert admin changes.
-    import time
-    _MANUAL_FIELDS = ("side", "size", "traded", "bought_sold", "traded_price", "initiator")
     now_ms = time.time() * 1000
     if data_ts and (now_ms - data_ts) < 5000:
         blotter_by_id = {r["id"]: r for r in (blotter_data or []) if "id" in r}
@@ -1100,7 +1100,7 @@ def refresh_blotter_prices(n_intervals, orders, blotter_data, data_ts):
             )
     except Exception:
         logger.exception("Blotter batch fetch failed")
-        return no_update
+        return no_update, no_update
 
     # Phase 2: price each order from cache (no additional API calls)
     changed = False

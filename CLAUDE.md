@@ -10,7 +10,7 @@ The core use case: broker sends an order like `AAPL Jun26 240/220 PS 1X2 vs250 1
 - **Dash (Plotly)** — web dashboard
 - **NumPy / SciPy** — numerical pricing
 - **blpapi 3.25.12** — Bloomberg Terminal API (installed; falls back to mock when Terminal not running)
-- **pytest** — 133 tests, all passing
+- **pytest** — 135 tests, all passing
 
 ## Project Structure
 ```
@@ -98,7 +98,7 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 ## Key Commands
 ```bash
 source .venv/Scripts/activate                      # Windows (Git Bash)
-pytest tests/ -v                                   # Run all 133 tests
+pytest tests/ -v                                   # Run all 135 tests
 python -m options_pricer.dashboard.app             # Launch pricer dashboard at http://127.0.0.1:8050
 python -m options_pricer.dashboard.blotter_app     # Launch blotter dashboard at http://127.0.0.1:8051
 ```
@@ -124,7 +124,6 @@ Auto-refresh updates ONLY calculations and live-feed data from the API. It must 
   - `auto_price_from_table` — triggered by `data_timestamp` + `manual-underlying` only (NO interval). Updates pricer table + header + broker quote.
   - `refresh_live_display` — triggered by `live-refresh-interval` only. Updates header (live stock price) + broker quote (edge). Never touches any DataTable.
   - `refresh_blotter_prices` — triggered by `live-refresh-interval`. Updates `order-store` (client-side store) AND persists to `orders.json` so Admin Dashboard picks up fresh prices via file polling. Stamps `last-write-time` so the pricer's own poll skips reloading.
-  - `push_store_to_blotter` — triggered by `order-store.data` changes (NOT a timer). Pushes display rows to `blotter-table.data` only when user is not actively editing. Sets `blotter-edit-suppress` so `sync_blotter_edits` skips the programmatic `data_timestamp` change.
 - **Blotter table:** 6 editable fields (`side`, `size`, `traded`, `bought_sold`, `traded_price`, `initiator`) must never be overwritten. Only update pricing columns and computed `pnl`.
 - **Wrap API calls in try/except.** Bloomberg fetch errors must not crash the refresh callback — a single bad ticker should not break repricing for all orders.
 - **CRITICAL: Any callback that programmatically writes to `blotter-table.data` MUST also output `blotter-edit-suppress = True`.** Writing to `data` triggers `data_timestamp`, which fires `sync_blotter_edits`. Without the suppress flag, `sync_blotter_edits` runs, potentially writes back to `order-store.data`, which re-triggers the original callback — creating an infinite loop. This applies to `push_store_to_blotter`, `sync_blotter_edits` itself, and `add_order`.
@@ -145,6 +144,15 @@ Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently s
 - **Structure-level**: If ANY leg has a failed quote, the structure summary row must also show `--`. Don't compute a structure price from partially invalid data.
 - **Blotter propagation**: Same `--` formatting applies to blotter pricing columns. PnL shows empty when mid is `--`.
 - **Never show "0.00" as a price** in any table cell. Any code path that formats prices for display must check for zeros and use `--`.
+
+## Engineering Conventions
+- **Dependencies:** `pyproject.toml` is the single source of truth for all dependencies. No `requirements.txt`. Dependencies use minimum version pinning (`>=X.Y.Z`). Dev dependencies go in `[project.optional-dependencies] dev`, Bloomberg in `bloomberg`.
+- **Cross-platform:** Code must run on both Windows (PC with Bloomberg Terminal) and macOS/Linux (dev). Use `sys.platform == "win32"` guards for Windows-specific modules (`msvcrt`). File locking uses `msvcrt` on Windows, `fcntl` on Unix — see `order_store.py`.
+- **No orphan config files:** All settings belong in the module that uses them (e.g., Bloomberg host/port in `bloomberg.py`, dashboard port in `app.py`). Do not create standalone config files unless they are imported somewhere.
+- **Callback output count:** Every return path in a Dash callback MUST return exactly N values matching the N Outputs. Use `return no_update, no_update, ...` (one per Output) for skip/error paths. This is a common source of runtime crashes.
+- **Style constants:** Use a single `_HIDDEN = {"display": "none"}` dict — do not create duplicates like `_HIDDEN_ALERT`. All theme constants live in `layouts.py` and are imported by other dashboard modules.
+- **Module-level imports and constants:** Never use `import` inside function bodies or define constants that should be module-level inside frequently-called functions. Dash callbacks run on every user interaction and timer tick.
+- **Technical debt:** Track deferred items in `DEBT.md` with rationale for deferral.
 
 ## Current Status & Next Steps
 - Parser handles all example formats provided so far (including `Nk` quantity format) — feed more real orders to refine

@@ -30,26 +30,28 @@ Structure types: put spreads, call spreads, risk reversals, straddles, strangles
 - **Dash (Plotly)** — web dashboard
 - **NumPy / SciPy** — numerical pricing
 - **blpapi** — Bloomberg Terminal API (falls back to mock when Terminal not running)
-- **pytest** — 100 tests
+- **pytest** — 135 tests
 
 ## Project Structure
 
 ```
 src/options_pricer/
+├── models.py            # Data classes (legs, structures, orders)
 ├── parser.py            # Regex-based broker shorthand parser
 ├── pricer.py            # Black-Scholes engine + Greeks
 ├── structure_pricer.py  # Structure bid/offer/mid from leg prices
 ├── bloomberg.py         # Live Bloomberg + mock client
-├── order_store.py       # JSON persistence (atomic writes)
-├── models.py            # Data classes (legs, structures, orders)
+├── order_store.py       # JSON persistence + cross-process file locking
 └── dashboard/
-    ├── app.py           # Dash callbacks (~900 lines)
-    └── layouts.py       # UI components (~700 lines)
+    ├── app.py           # Dash web app + pricer-specific callbacks
+    ├── blotter_app.py   # Standalone blotter dashboard (port 8051)
+    ├── callbacks.py     # Shared blotter callbacks (poll, sync, columns)
+    └── layouts.py       # UI layouts and theme system
 tests/
 ├── test_models.py       # 17 tests — payoffs, structures
-├── test_parser.py       # 43 tests — parser extraction + full orders
-├── test_order_store.py  # 11 tests — JSON persistence
-└── test_pricer.py       # 23 tests — BS pricing, Greeks, structures
+├── test_parser.py       # 68 tests — parser extraction + full orders
+├── test_order_store.py  # 17 tests — JSON persistence, file locking
+└── test_pricer.py       # 25 tests — BS pricing, Greeks, structures
 ```
 
 ## Getting Started
@@ -62,7 +64,7 @@ source .venv/Scripts/activate   # Windows (Git Bash)
 # source .venv/bin/activate     # Mac/Linux
 pip install -e .
 python -m options_pricer.dashboard.app   # http://127.0.0.1:8050
-pytest tests/ -v                         # 94 tests
+pytest tests/ -v                         # 135 tests
 ```
 
 ## Key Concepts
