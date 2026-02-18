@@ -1,14 +1,17 @@
 """Tests for the order store JSON persistence layer."""
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from options_pricer.order_store import (
     _file_lock,
+    _orders_file_for_date,
     add_order,
     get_orders_mtime,
+    list_order_dates,
     load_orders,
     orders_to_display,
     save_orders,
@@ -204,3 +207,106 @@ class TestGetOrdersMtime:
         save_orders([{"id": "1"}], fp)
         mtime2 = get_orders_mtime(fp)
         assert mtime2 > mtime1
+
+
+class TestOrdersFileForDate:
+    def test_returns_path_for_today(self):
+        path = _orders_file_for_date()
+        assert path.name == f"{date.today().isoformat()}.json"
+        assert path.parent.name == "orders"
+
+    def test_returns_path_for_specific_date(self):
+        d = date(2026, 1, 15)
+        path = _orders_file_for_date(d)
+        assert path.name == "2026-01-15.json"
+
+
+class TestListOrderDates:
+    def test_empty_directory(self, tmp_path):
+        assert list_order_dates(tmp_path) == []
+
+    def test_nonexistent_directory(self, tmp_path):
+        assert list_order_dates(tmp_path / "nope") == []
+
+    def test_finds_date_files(self, tmp_path):
+        (tmp_path / "2026-02-17.json").write_text('{"orders":[]}')
+        (tmp_path / "2026-02-18.json").write_text('{"orders":[]}')
+        (tmp_path / "2026-01-05.json").write_text('{"orders":[]}')
+        # Non-matching files should be ignored
+        (tmp_path / "orders.lock").write_text("")
+        (tmp_path / "notes.json").write_text("{}")
+        (tmp_path / ".orders_tmp.json").write_text("{}")
+
+        dates = list_order_dates(tmp_path)
+        assert dates == [date(2026, 2, 18), date(2026, 2, 17), date(2026, 1, 5)]
+
+    def test_sorted_most_recent_first(self, tmp_path):
+        (tmp_path / "2025-12-01.json").write_text('{"orders":[]}')
+        (tmp_path / "2026-03-15.json").write_text('{"orders":[]}')
+        (tmp_path / "2026-01-10.json").write_text('{"orders":[]}')
+
+        dates = list_order_dates(tmp_path)
+        assert dates[0] == date(2026, 3, 15)
+        assert dates[-1] == date(2025, 12, 1)
+
+
+class TestLegacyMigration:
+    def test_migration_moves_orders_to_date_file(self, tmp_path, monkeypatch):
+        """Legacy orders.json is migrated to orders/YYYY-MM-DD.json."""
+        import options_pricer.order_store as mod
+
+        legacy_file = tmp_path / "orders.json"
+        orders_dir = tmp_path / "orders"
+        legacy_orders = [
+            {"id": "1", "added_time": "09:30", "underlying": "AAPL"},
+            {"id": "2", "added_time": "10:15", "underlying": "MSFT"},
+        ]
+        legacy_file.write_text(json.dumps({"orders": legacy_orders}))
+
+        # Patch module-level paths and reset migration flag
+        monkeypatch.setattr(mod, "_LEGACY_FILE", legacy_file)
+        monkeypatch.setattr(mod, "_ORDERS_DIR", orders_dir)
+        monkeypatch.setattr(mod, "_migrated", False)
+
+        # Calling load_orders without filepath triggers migration
+        result = mod.load_orders()
+        assert len(result) == 2
+        assert result[0]["id"] == "1"
+
+        # Legacy file renamed to .bak
+        assert not legacy_file.exists()
+        assert legacy_file.with_suffix(".json.bak").exists()
+
+        # Orders dir created with today's file
+        assert orders_dir.is_dir()
+        today_file = orders_dir / f"{date.today().isoformat()}.json"
+        assert today_file.exists()
+
+    def test_migration_skips_if_dir_exists(self, tmp_path, monkeypatch):
+        """If orders/ dir already exists, migration is skipped."""
+        import options_pricer.order_store as mod
+
+        legacy_file = tmp_path / "orders.json"
+        orders_dir = tmp_path / "orders"
+        orders_dir.mkdir()
+        legacy_file.write_text(json.dumps({"orders": [{"id": "old"}]}))
+
+        monkeypatch.setattr(mod, "_LEGACY_FILE", legacy_file)
+        monkeypatch.setattr(mod, "_ORDERS_DIR", orders_dir)
+        monkeypatch.setattr(mod, "_migrated", False)
+
+        # Should not migrate — dir already exists
+        result = mod.load_orders()
+        assert result == []  # No today file yet
+        assert legacy_file.exists()  # Legacy file untouched
+
+    def test_migration_skips_if_no_legacy_file(self, tmp_path, monkeypatch):
+        """If no legacy orders.json exists, migration is a no-op."""
+        import options_pricer.order_store as mod
+
+        monkeypatch.setattr(mod, "_LEGACY_FILE", tmp_path / "orders.json")
+        monkeypatch.setattr(mod, "_ORDERS_DIR", tmp_path / "orders")
+        monkeypatch.setattr(mod, "_migrated", False)
+
+        result = mod.load_orders()
+        assert result == []

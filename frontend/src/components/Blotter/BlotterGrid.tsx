@@ -11,7 +11,14 @@ import type { BlotterOrder } from '../../types';
 
 const ALL_COLUMNS: ColDef<BlotterOrder>[] = [
   { field: 'id', headerName: 'ID', width: 80, cellStyle: { fontSize: '11px', textAlign: 'left' } },
-  { field: 'added_time', headerName: 'Time', width: 65 },
+  {
+    field: 'added_time', headerName: 'Time', width: 85,
+    valueFormatter: (params) => {
+      if (!params.value) return '';
+      const parts = String(params.value).split('T');
+      return parts[1] || params.value; // "HH:MM:SS" or legacy "HH:MM"
+    },
+  },
   { field: 'underlying', headerName: 'Underlying', width: 90 },
   { field: 'structure', headerName: 'Structure', width: 200, flex: 1 },
   {

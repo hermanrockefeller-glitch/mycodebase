@@ -12,6 +12,13 @@ function genId(): string {
   });
 }
 
+/** Local ISO 8601 timestamp: "YYYY-MM-DDTHH:MM:SS" (no timezone — matches backend date.today()). */
+function localISOTimestamp(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export default function AddOrderButton() {
   const currentStructure = usePricerStore((s) => s.currentStructure);
   const addOrder = useBlotterStore((s) => s.addOrder);
@@ -25,7 +32,7 @@ export default function AddOrderButton() {
 
     const order: BlotterOrder = {
       id: genId(),
-      added_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      added_time: localISOTimestamp(),
       underlying: cs.underlying,
       structure: `${cs.structure_name} ${cs.structure_detail}`,
       bid: cs.bid != null ? cs.bid.toFixed(2) : '--',

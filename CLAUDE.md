@@ -13,7 +13,7 @@ The core use case: broker sends an order like `AAPL Jun26 240/220 PS 1X2 vs250 1
 - **Zustand** — React state management
 - **NumPy / SciPy** — numerical pricing
 - **blpapi 3.25.12** — Bloomberg Terminal API (installed; falls back to mock when Terminal not running)
-- **pytest** — 135 tests, all passing
+- **pytest** — 144 tests, all passing
 
 ## Project Structure
 ```
@@ -24,7 +24,7 @@ src/
     pricer.py               # Black-Scholes pricing engine + Greeks (delta, gamma, theta, vega, rho)
     structure_pricer.py     # Calculates structure bid/offer/mid from individual leg screen prices
     bloomberg.py            # BloombergClient (live) + MockBloombergClient (BS-based realistic quotes)
-    order_store.py          # JSON persistence + cross-process file locking (~/.options_pricer/orders.json)
+    order_store.py          # Per-day JSON persistence (~/.options_pricer/orders/YYYY-MM-DD.json) + cross-process file locking
   api/                      # FastAPI backend
     main.py                 # FastAPI app, CORS, lifespan, background price broadcaster
     schemas.py              # Pydantic request/response models
@@ -60,7 +60,7 @@ frontend/                   # React + Vite + TypeScript
 tests/
   test_models.py            # 17 tests — payoffs, structures
   test_parser.py            # 68 tests — extraction helpers + full order parsing for all IDB formats
-  test_order_store.py       # 17 tests — JSON persistence, file locking, mtime helpers
+  test_order_store.py       # 26 tests — JSON persistence, file locking, per-day storage, migration, mtime helpers
   test_pricer.py            # 25 tests — BS pricing, put-call parity, Greeks, structure pricing
 ```
 
@@ -103,7 +103,7 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 - **Structure Builder:** +Row, -Row, Flip, Clear buttons above the pricing grid (always visible).
 - **Broker quote section:** Shows broker price vs screen mid and edge (color-coded green/red).
 - **Add Order:** Creates a blotter order from the current priced structure.
-- **Order Blotter:** AG Grid with 16 columns (6 editable with dropdowns: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Sortable. Click row to recall into pricer. PnL auto-calcs for traded orders. Cell flash on price updates. Data persists to `~/.options_pricer/orders.json`.
+- **Order Blotter:** AG Grid with 16 columns (6 editable with dropdowns: side, size, traded, bought/sold, traded price, initiator). Column toggle via "Columns" button. Sortable. Click row to recall into pricer. PnL auto-calcs for traded orders. Cell flash on price updates. Per-day persistence to `~/.options_pricer/orders/YYYY-MM-DD.json`. Timestamps are local ISO 8601 (`YYYY-MM-DDTHH:MM:SS`), displayed as `HH:MM:SS` in the Time column.
 - **Health indicator:** Green/red badge for Bloomberg status, WS connection dot (green=live, gray=reconnecting).
 - **Blotter-only view:** `http://localhost:5173/blotter` — standalone blotter without the pricer (replaces old `blotter_app.py` on port 8051). Same WebSocket sync, same editable cells. Header links between the two views.
 
@@ -114,7 +114,7 @@ AAPL Jun26 220/250/260 CSC vs250 20d 500x
 - **Cross-tab sync:** Order mutations broadcast via WS to all connected clients (replaces file polling)
 - **AG Grid `onCellValueChanged`** fires only on user edits — no suppress flags needed (unlike Dash DataTable)
 - **AG Grid `applyTransactionAsync`** for streaming price updates without disrupting edit state
-- `orders.json` remains the source of truth for persistence
+- Per-day `orders/YYYY-MM-DD.json` files are the source of truth for persistence (one-time migration from legacy `orders.json`)
 
 ## Key Concepts
 - **Tied to (tt/vs):** The stock price at which the option package is quoted. Delta-hedged trades sell/buy stock at this price.
@@ -176,7 +176,10 @@ Bloomberg failures must ALWAYS be surfaced visibly to the user. Never silently s
 - Parser handles all IDB broker shorthand formats (19 structure types)
 - Bloomberg API integrated; falls back to mock when Terminal not running
 - Order Blotter: AG Grid with live price updates via WebSocket, editable cells, column toggle, PnL auto-calc, cross-tab sync
-- 135 Python tests all passing (business logic unchanged)
+- Per-day order storage (`orders/YYYY-MM-DD.json`) with one-time migration from legacy `orders.json`
+- ISO 8601 timestamps (`YYYY-MM-DDTHH:MM:SS`) for correct cross-day sorting
+- 144 Python tests all passing (business logic unchanged)
+- Next: date picker UI for browsing historical order dates
 - Next: delta adjustment for stock tie vs current price in structure pricing
 - Next: more structure types as needed (diagonals, etc.)
 - Next: SPX/index options with combo pricing
